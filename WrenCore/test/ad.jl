@@ -92,6 +92,59 @@ end
         result = benchmark_model(ad_model(), AutoForwardDiff(); seconds=0.1, verbose=false)
         @test result.lp_and_grad_bench.time > 0
         @test occursin("grad / lp", sprint(show, MIME"text/plain"(), result))
+
+        @testset "vector-space start is benchmarked exactly" begin
+            # Converting this start to the original space and back again does not recover
+            # the zero vector exactly, so the point must not take that round trip.
+            @wren function simplex_model()
+                x ~ WrenDists.Dirichlet(fill(0.1, 1495))
+            end
+            start = zeros(1494)
+            source = FromValues(
+                VarNamedTuple(x=TransformedValue(start, AsUnconstrainedVec())),
+            )
+            for adtype in (nothing, AutoEnzyme(; mode=Reverse))
+                result = benchmark_model(
+                    simplex_model(),
+                    adtype;
+                    latent_source=source,
+                    reduce_copies=false,
+                    seconds=0.1,
+                    verbose=false,
+                )
+                @test result.vecmodel.sample == start
+                @test (result.lp_and_grad_bench === nothing) == (adtype === nothing)
+            end
+        end
+
+        @testset "all backends benchmark the same prior draw" begin
+            # With Enzyme, `VecModel` evaluates its latent source once more in
+            # `reduce_copies`, which would advance a `FromPrior` RNG.
+            @wren function args_model(y)
+                x ~ WrenDists.Normal()
+                @observe y ~ WrenDists.Normal(x)
+            end
+            primal = benchmark_model(args_model(0.5); seconds=0.1, verbose=false)
+            enzyme = benchmark_model(
+                args_model(0.5),
+                AutoEnzyme(; mode=Reverse);
+                seconds=0.1,
+                verbose=false,
+            )
+            @test enzyme.vecmodel.sample == primal.vecmodel.sample
+        end
+
+        @testset "VecModel method" begin
+            vecmodel = VecModel(
+                ad_model(),
+                AutoForwardDiff();
+                latent_source=FromPrior(Xoshiro(474)),
+            )
+            result = benchmark_model(vecmodel; seconds=0.1, verbose=false)
+            @test result.vecmodel === vecmodel
+            @test result.lp_and_grad_bench.time > 0
+            @test result.logjoint_bench.time > 0
+        end
     end
 
     @testset "@bmodel" begin

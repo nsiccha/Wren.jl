@@ -422,6 +422,13 @@ end
         lp_function=logjoint_transformed,
         latent_source::AbstractLatentSource=FromPrior(Xoshiro(468)),
         parameter_space::AbstractParameterSpace=UnconstrainedSpace(),
+        reduce_copies::Bool=true,
+        seconds::Real=1,
+        verbose::Bool=(!isinteractive()),
+    ) -> BenchmarkResult
+
+    benchmark_model(
+        vecmodel::VecModel;
         seconds::Real=1,
         verbose::Bool=(!isinteractive()),
     ) -> BenchmarkResult
@@ -435,11 +442,22 @@ Benchmark a model at multiple levels:
 
 Note that if `adtype` is given, the corresponding backend package must be loaded first.
 
-The `lp_function`, `latent_source`, and `parameter_space` keywords are forwarded to
-[`VecModel`](@ref). `lp_function` and `parameter_space` have the same defaults as for
-`VecModel`. `latent_source` instead defaults to drawing from the prior with a fixed seed, so
-that every call benchmarks at the same parameters. (The time taken can depend on the
-parameter values, so random parameters make results vary between calls.)
+The `lp_function`, `latent_source`, `parameter_space`, and `reduce_copies` keywords are
+forwarded to [`VecModel`](@ref). `lp_function`, `parameter_space`, and `reduce_copies` have
+the same defaults as for `VecModel`. `latent_source` instead defaults to drawing from the
+prior with a fixed seed, so that every call benchmarks at the same parameters. (The time
+taken can depend on the parameter values, so random parameters make results vary between
+calls.)
+
+`latent_source` is evaluated once, directly in `parameter_space`, and the resulting vector
+is the point used for density and gradient evaluation (`result.vecmodel.sample`). Values that
+`latent_source` already supplies in that space, such as a
+`TransformedValue(v, AsUnconstrainedVec())` in the default `UnconstrainedSpace`, are used
+exactly as given rather than converted to the model's original space and back.
+
+The second method benchmarks an existing `VecModel` at `vecmodel.sample`, with the AD
+backend it was constructed with. The model-level log-joint benchmark uses the model-space parameters
+`parameters(vecmodel, vecmodel.sample)`.
 
 `seconds` is the approximate time spent on each of the benchmarks.
 
@@ -451,18 +469,32 @@ function benchmark_model(
     lp_function=logjoint_transformed,
     latent_source::AbstractLatentSource=FromPrior(Xoshiro(468)),
     parameter_space::AbstractParameterSpace=UnconstrainedSpace(),
+    reduce_copies::Bool=true,
     seconds::Real=1,
     verbose::Bool=(!isinteractive()),
 )
-    vnt_params = parameters(model, latent_source)
+    # Draw the benchmark point once and pass it on as a `FromVector`, so that a stateful
+    # source such as `FromPrior(rng)` is not drawn from again while `VecModel` is prepared
+    # (e.g. by `reduce_copies`). Every AD backend therefore benchmarks the same vector.
+    vecinfo, sample = _prepare_vecmodel_info(model, latent_source, parameter_space)
     vecmodel = VecModel(
         model,
         adtype;
-        latent_source=FromValues(vnt_params),
+        latent_source=FromVector(sample, vecinfo),
         lp_function,
         parameter_space,
+        reduce_copies,
     )
+    return benchmark_model(vecmodel; seconds, verbose)
+end
+function benchmark_model(
+    vecmodel::VecModel;
+    seconds::Real=1,
+    verbose::Bool=(!isinteractive()),
+)
+    model = vecmodel.model
     params = vecmodel.sample
+    vnt_params = parameters(vecmodel, params)
 
     # Model level
     rng = Xoshiro(468) # avoid mutating global RNG
@@ -471,7 +503,7 @@ function benchmark_model(
 
     # VecModel level
     lp_bench = _min_bench(() -> lp(vecmodel, params), seconds)
-    lp_and_grad_bench = if adtype === nothing
+    lp_and_grad_bench = if vecmodel.adtype === nothing
         nothing
     else
         _min_bench(() -> lp_and_grad(vecmodel, params), seconds)

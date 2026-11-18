@@ -60,6 +60,10 @@ This recommendation in the context of Wren is mostly based on anecdotal evidence
 
 `@bmodel` is shorthand for the [`benchmark_model`](@ref) function, which also accepts keyword arguments to control how the model is vectorised (for example, which parameters to benchmark at).
 
+The `latent_source` keyword chooses the benchmark point, and it is used exactly as given: a value supplied in unconstrained space, such as `TransformedValue(v, AsUnconstrainedVec())`, is benchmarked at exactly `v`.
+The point is available afterwards as `result.vecmodel.sample`.
+If you have already constructed a [`VecModel`](@ref), `benchmark_model(vecmodel)` benchmarks it at `vecmodel.sample`, using the AD backend that it was constructed with.
+
 ## Testing AD correctness
 
 To check that an AD backend gives the right log-density and gradient, use [`test_ad`](@ref).
