@@ -16,14 +16,18 @@ BernoulliLogit() = BernoulliLogit(0.0)
 Base.eltype(::Type{BernoulliLogit{P}}) where {P} = float(P)
 
 # `log(logistic(η)) = -log1pexp(-η)` and `log(1 - logistic(η)) = -log1pexp(η)`.
+@inline function bernoullilogit_logmass(η::T, x::Number) where {T<:Number}
+    return select(
+        iszero(x) | isone(x),
+        () -> -log1pexp(ifelse(isone(x), -η, η)),
+        () -> convert(T, -Inf),
+    )
+end
+
 @inline function DensityInterface.logdensityof(d::BernoulliLogit, x::Number)
     T = masstype(d, x)
     η = convert(T, d.logitp)
-    return select(
-        x == one(x),
-        () -> -log1pexp(-η),
-        () -> select(x == zero(x), () -> -log1pexp(η), () -> convert(T, -Inf)),
-    )
+    return bernoullilogit_logmass(η, x)
 end
 
 @inline Base.rand(rng::AbstractRNG, d::BernoulliLogit) =
@@ -41,13 +45,16 @@ end
 function DensityInterface.logdensityof(d::BatchedBernoulliLogit, x)
     η = d.logitp
     return if within_compile()
-        sum(@. x * η - log1pexp(η))
+        # Promote as the scalar and native paths do, so integer logits have a float
+        # mass and Float32 logits keep the precision of Float64 outcomes.
+        η = convert.(float(promote_type(eltype(x), eltype(η))), η)
+        sum(bernoullilogit_logmass.(η, x))
     else
         T = float(promote_type(eltype(x), eltype(η)))
         s = zero(T)
         for i in eachindex(x, η)
             ηi = convert(T, η[i])
-            s += convert(T, x[i]) * ηi - log1pexp(ηi)
+            s += bernoullilogit_logmass(ηi, x[i])
         end
         s
     end

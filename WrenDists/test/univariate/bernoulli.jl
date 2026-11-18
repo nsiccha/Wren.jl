@@ -82,3 +82,74 @@ test_dist(
         end,
     ),
 )
+
+@testset "BernoulliLogit batched tails" begin
+    expected_value = -log1p(exp(-40.0))
+    expected_gradient = exp(-40.0) / (1 + exp(-40.0))
+    for (η, y, sign) in ((40.0, 1, 1), (-40.0, 0, -1))
+        scalar(θ) = logdensityof(WrenDists.BernoulliLogit(θ), y)
+        batched(θ) = logdensityof(WrenDists.BatchedBernoulliLogit([θ]), [y])
+        for f in (scalar, batched)
+            (gradient,), value = Enzyme.autodiff(
+                Enzyme.ReverseWithPrimal,
+                f,
+                Enzyme.Active,
+                Enzyme.Active(η),
+            )
+            @test value ≈ expected_value rtol = 1e-12 atol = 0
+            @test gradient ≈ sign * expected_gradient rtol = 1e-12 atol = 0
+        end
+    end
+
+    @test logdensityof(WrenDists.BatchedBernoulliLogit([40.0, -50.0]), [1, 0]) ≈
+          -log1p(exp(-40.0)) - log1p(exp(-50.0)) rtol = 1e-12 atol = 0
+    for y in (-1, 2, 0.5)
+        @test logdensityof(WrenDists.BatchedBernoulliLogit([0.0]), [y]) == -Inf
+    end
+end
+
+@testset "BernoulliLogit cached gradients" begin
+    f(η) = logdensityof(WrenDists.BatchedBernoulliLogit(η), [1, 0])
+    ad = DI.AutoReverseDiff(; compile=true)
+    prep = DI.prepare_gradient(f, ad, [40.0, -50.0])
+    for η in ([40.0, -50.0], [-40.0, 50.0], [0.0, 0.0])
+        expected = [exp(-η[1]) / (1 + exp(-η[1])), -exp(η[2]) / (1 + exp(η[2]))]
+        @test DI.gradient(f, prep, ad, η) ≈ expected rtol = 1e-12 atol = 0
+    end
+end
+
+@static if RUN_REACTANT
+    @testset "BatchedBernoulliLogit compiled tails" begin
+        f(η, x) = logdensityof(WrenDists.BatchedBernoulliLogit(η), x)
+        grad(η, x) = Enzyme.gradient(Enzyme.Reverse, f, η, Enzyme.Const(x))[1]
+        η, x = Reactant.to_rarray.(([40.0, -50.0], [1, 0]))
+        compiled_value = Reactant.@compile f(η, x)
+        compiled_grad = Reactant.@compile grad(η, x)
+        for logits in ([40.0, -50.0], [-40.0, 50.0], [0.0, 0.0])
+            η = Reactant.to_rarray(logits)
+            expected = [
+                exp(-logits[1]) / (1 + exp(-logits[1])),
+                -exp(logits[2]) / (1 + exp(logits[2])),
+            ]
+            @test Float64(compiled_value(η, x)) ≈ f(logits, [1, 0]) rtol = 1e-12 atol = 0
+            @test Array(compiled_grad(η, x)) ≈ expected rtol = 1e-12 atol = 0
+        end
+    end
+
+    @testset "BatchedBernoulliLogit compiled promotion" begin
+        # The compiled path promotes like the native one: integer logits work, and
+        # Float32 logits with Float64 outcomes give a Float64 result.
+        for (logits, x) in (
+            ([2, -1, 0], [1.0, 0.0, 1.0]),
+            (Float32[40, -50], [1.0, 0.0]),
+            ([40.0, -50.0, 0.0], [1.0, 0.0, 2.0]),
+        )
+            d = WrenDists.BatchedBernoulliLogit(logits)
+            native = logdensityof(d, x)
+            d_ra, x_ra = Reactant.to_rarray(d), Reactant.to_rarray(x)
+            compiled = Reactant.@jit logdensityof(d_ra, x_ra)
+            @test Reactant.unwrapped_eltype(compiled) == typeof(native)
+            @test typeof(native)(compiled) ≈ native rtol = 1e-12 atol = 0
+        end
+    end
+end
