@@ -30,7 +30,7 @@ end
 # Applying `μ` and `b` afterward lets automatic differentiation pass through the sample.
 @inline function Base.rand(rng::AbstractRNG, d::Laplace)
     T = noisetype(d)
-    e₁ = -log(rand(rng, T))
-    e₂ = -log(rand(rng, T))
+    e₁ = -log1p(-rand(rng, T))
+    e₂ = -log1p(-rand(rng, T))
     return xval(d, e₁ - e₂)
 end

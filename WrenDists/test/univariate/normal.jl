@@ -111,3 +111,12 @@ test_dist(
         end,
     ),
 )
+
+@testset "BatchedNormal input shape" begin
+    for sigma in (ones(3), Fill(1.0, 3))
+        d = WrenDists.BatchedNormal(zeros(3), sigma)
+        for x in (zeros(2), zeros(4), zeros(3, 1))
+            @test_throws DimensionMismatch logdensityof(d, x)
+        end
+    end
+end

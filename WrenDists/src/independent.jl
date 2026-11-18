@@ -48,7 +48,7 @@ Base.rand(rng::Random.AbstractRNG, d::IndependentArray) =
 Base.rand(d::Independent) = rand(Random.default_rng(), d)
 
 DensityInterface.DensityKind(::Independent) = DensityInterface.HasDensity()
-function _check_size(d::Independent, x::AbstractArray)
+function _check_size(d, x::AbstractArray)
     size(x) == size(d) ||
         throw(DimensionMismatch("expected size $(size(d)), got $(size(x))"))
     return nothing

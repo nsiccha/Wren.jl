@@ -60,6 +60,7 @@ Base.rand(rng::Random.AbstractRNG, d::BatchedNormal) =
     convert.(noisetype(d), randn(rng, size(d.mu))) .* d.sigma .+ d.mu
 
 function DensityInterface.logdensityof(d::BatchedNormal, x::AbstractArray{<:Number})
+    _check_size(d, x)
     # Benchmarks @ https://github.com/JuliaBayes/Wren.jl/issues/99
     mu, sigma = d.mu, d.sigma
     # Promote so that integer data or parameters still give a float result.
@@ -83,6 +84,7 @@ function DensityInterface.logdensityof(
     d::BatchedNormal{<:AbstractArray,<:AbstractFill},
     x::AbstractArray{<:Number},
 )
+    _check_size(d, x)
     mu, sigma = d.mu, getindex_value(d.sigma)
     T = float(promote_type(eltype(x), eltype(mu), typeof(sigma)))
     sqdist = if within_compile()
