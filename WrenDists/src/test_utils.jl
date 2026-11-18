@@ -32,6 +32,9 @@ end
 function Plaice.test_in_support(d::WrenDists.Uniform, x)
     @test d.a <= x <= d.b
 end
+function Plaice.test_in_support(d::WrenDists.TruncatedFlat, x)
+    @test d.lower < x < d.upper
+end
 
 # Dirichlet needs special logjac test helpers because vec_length != unconstrained_vec_length
 Plaice.to_vec_for_logjac_test(::WrenDists.Dirichlet) = x -> x[1:(end-1)]

@@ -34,6 +34,7 @@ using Test
     include("issues/132.jl")
     include("issues/146.jl")
     include("issues/155.jl")
+    include("issues/192.jl")
 end
 
 end # module WrenCoreTests

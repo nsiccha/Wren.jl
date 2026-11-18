@@ -21,6 +21,15 @@ WrenDists.TDist
 WrenDists.Flat
 ```
 
+### Constrained flat prior
+
+Use `WrenDists.truncated(WrenDists.Flat(); lower=0)` for an unnormalised flat
+prior constrained to positive values.
+
+```@docs
+WrenDists.truncated
+```
+
 ### Continuous $\mathbb{R}^+$
 
 ```@docs
