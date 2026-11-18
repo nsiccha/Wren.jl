@@ -3,14 +3,14 @@
   "line": {
     "repo": "nsiccha/Wren.jl",
     "ref": "dogfood",
-    "sha": "032082fc2d097db5445c853d7a47efc96de88caa"
+    "sha": "04bbb4a5ec3458a23103c9c5a8f9434f0b1d58fa"
   },
   "upstream": {
     "repo": "JuliaBayes/Wren.jl",
     "ref": "main",
-    "sha": "68932e0089ab07ff47153a591a48a3f3990d63e2"
+    "sha": "42dfedef0564b739a8e16d2c635e6306137b39a9"
   },
-  "prepared_at": "2026-11-18T13:30:37Z",
+  "prepared_at": "2026-11-18T19:43:52Z",
   "problems": [
     {
       "id": "bernoulli-logit-tails",
@@ -50,6 +50,15 @@
       "validation": [
         {
           "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "WrenDists/test/univariate/bernoulli.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "12/12 native tail and reverse-mode assertions, 3/3 cached ReverseDiff assertions across sign changes. No Reactant run on the integrated revision."
+        },
+        {
+          "base": "04bbb4a5ec3458a23103c9c5a8f9434f0b1d58fa",
           "tests": [
             "WrenDists/test/univariate/bernoulli.jl"
           ],
@@ -113,6 +122,16 @@
           "result": "passed",
           "julia": "1.13.1",
           "detail": "20/20 native distribution assertions and 5/5 positive-scale and parameter-dependent model assertions. Integrated Reactant checks were not run."
+        },
+        {
+          "base": "04bbb4a5ec3458a23103c9c5a8f9434f0b1d58fa",
+          "tests": [
+            "WrenDists/test/univariate/truncatedflat.jl",
+            "WrenCore/test/issues/192.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "20/20 native distribution assertions and 5/5 positive-scale and parameter-dependent model assertions. Integrated Reactant checks were not run."
         }
       ]
     },
@@ -152,12 +171,21 @@
           "result": "passed",
           "julia": "1.13.1",
           "detail": "30/30 in the AD utility suite. For the 1,495-component Dirichlet in the draft, the main-branch start-construction calls gave a maximum absolute discrepancy of 8.881784197001252e-16; the repaired benchmark gave exactly 0.0."
+        },
+        {
+          "base": "04bbb4a5ec3458a23103c9c5a8f9434f0b1d58fa",
+          "tests": [
+            "WrenCore/test/ad.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "30/30 AD utility checks passed. The draft example changed the requested 1,494-coordinate start by up to 8.881784197001252e-16 on upstream main. The dogfood benchmark preserved every coordinate exactly."
         }
       ],
       "draft": {
         "title": "benchmark_model changes an explicitly supplied unconstrained starting vector",
-        "prepared_at": "2026-11-18T13:30:37Z",
-        "body": "On Wren main at `68932e0089ab07ff47153a591a48a3f3990d63e2`, the model-level benchmark obtains original-space parameters and then vectorises them again. On a simplex, that round trip can change individual coordinates of a start the caller already supplied in unconstrained space.\n\n```julia\nusing WrenCore\nimport WrenDists\n\n@wren function simplex_prior()\n    x ~ WrenDists.Dirichlet(fill(0.1, 1495))\nend\n\nstart = zeros(1494)\nsource = FromValues(VarNamedTuple(x=TransformedValue(start, AsUnconstrainedVec())))\nr = benchmark_model(simplex_prior(); latent_source=source, verbose=false, seconds=0.01)\n@show maximum(abs.(r.vecmodel.sample .- start))\n@assert r.vecmodel.sample == start\n```\n\nOn Julia 1.13.1 the two start-construction calls from main produced a maximum absolute difference of 8.881784197001252e-16. Preserving the supplied vector gave exactly 0.0.\n\nExpected: the benchmark evaluates the density and gradient at the exact supplied vector, including when the caller compares AD backends. Taking the vector directly also avoids applying the model-to-vector simplex transform a second time. The separate sparse-prior-draw failure is tracked in #202."
+        "prepared_at": "2026-11-18T19:43:52Z",
+        "body": "On Wren main at `42dfedef0564b739a8e16d2c635e6306137b39a9`, the model-level benchmark obtains original-space parameters and then vectorises them again. On a simplex, that round trip can change individual coordinates of a start the caller already supplied in unconstrained space.\n\n```julia\nusing WrenCore\nimport WrenDists\n\n@wren function simplex_prior()\n    x ~ WrenDists.Dirichlet(fill(0.1, 1495))\nend\n\nstart = zeros(1494)\nsource = FromValues(VarNamedTuple(x=TransformedValue(start, AsUnconstrainedVec())))\nr = benchmark_model(simplex_prior(); latent_source=source, verbose=false, seconds=0.01)\n@show maximum(abs.(r.vecmodel.sample .- start))\n@assert r.vecmodel.sample == start\n```\n\nOn Julia 1.13.1 running the example on upstream main produced a maximum absolute difference of 8.881784197001252e-16. Preserving the supplied vector gave exactly 0.0.\n\nExpected: the benchmark evaluates the density and gradient at the exact supplied vector, including when the caller compares AD backends. Taking the vector directly also avoids applying the model-to-vector simplex transform a second time. The separate sparse-prior-draw failure is tracked in #202."
       }
     },
     {
