@@ -36,6 +36,23 @@ You can also use all the distributions from [Distributions.jl](https://juliastat
 This is useful if you just want a familiar interface and don't need any of the features of Wren's built-in distributions.
 Indeed, Wren promises that `@batch` will still work _correctly_ with these distributions; it's just that it will fall back to using `product_distribution`, which won't give you any speedups over the unbatched loop.
 
+For a variance prior with shape 2 and scale 3, you can use
+`Distributions.InverseGamma` directly:
+
+```julia
+using WrenCore
+using Distributions: InverseGamma
+
+@wren function variance_prior()
+    variance ~ InverseGamma(2.0, 3.0)
+end
+
+parameters(variance_prior())
+```
+
+The sampled variance is positive. Wren's built-in `WrenDists.InverseGamma`
+uses the same shape and scale convention.
+
 ## Custom distributions
 
 Wren has a fully generic interface which allows you to create custom distributions so long as they provide:
