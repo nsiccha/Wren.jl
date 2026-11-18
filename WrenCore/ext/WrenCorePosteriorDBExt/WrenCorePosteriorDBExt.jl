@@ -96,6 +96,30 @@ include("models/irt_2pl.jl")
 include("models/lsat.jl")
 include("models/nes_logit.jl")
 include("models/survey.jl")
+include("models/accel_splines.jl")
+include("models/arma11.jl")
+include("models/diamonds.jl")
+include("models/dugongs.jl")
+include("models/garch11.jl")
+include("models/gp_pois_regr.jl")
+include("models/low_dim_gauss_mix_collapse.jl")
+include("models/low_dim_gauss_mix.jl")
+include("models/losscurve_sislob.jl")
+include("models/normal_mixture.jl")
+include("models/normal_mixture_k.jl")
+include("models/sblrc_blr.jl")
+include("models/seeds.jl")
+include("models/seeds_centered.jl")
+include("models/seeds_stanified.jl")
+include("models/sesame_one_pred.jl")
+include("models/surgical_model.jl")
+include("models/soil_incubation.jl")
+include("models/covid_imperial.jl")
+include("models/presidential_gp.jl")
+include("models/prophet.jl")
+include("models/mcycle_gp.jl")
+include("models/uk_drivers.jl")
+include("models/logistic_rhs.jl")
 
 # Maps PosteriorDB posterior names to containers with a `wren_model` property.
 const MODELS = Dict(
@@ -213,6 +237,34 @@ const MODELS = Dict(
     "lsat_data-lsat_model" => LSAT,
     "nes_logit_data-nes_logit_model" => NESLogit,
     "Survey_data-Survey_model" => Survey,
+    "mcycle_splines-accel_splines" => AccelSplines,
+    "arma-arma11" => ARMA11,
+    "diamonds-diamonds" => Diamonds,
+    "dugongs_data-dugongs_model" => Dugongs,
+    "garch-garch11" => Garch11,
+    "gp_pois_regr-gp_pois_regr" => GPPoissonRegression,
+    "low_dim_gauss_mix_collapse-low_dim_gauss_mix_collapse" => LowDimGaussMixCollapse,
+    "low_dim_gauss_mix-low_dim_gauss_mix" => LowDimGaussMix,
+    "loss_curves-losscurve_sislob" => LossCurveSislob,
+    "normal_2-normal_mixture" => NormalMixture,
+    "normal_5-normal_mixture_k" => NormalMixtureK,
+    "sblrc-blr" => SblrcBLR,
+    "seeds_data-seeds_model" => Seeds,
+    "seeds_data-seeds_centered_model" => SeedsCentered,
+    "seeds_data-seeds_stanified_model" => SeedsStanified,
+    "sesame_data-sesame_one_pred_a" => SesameOnePred,
+    "surgical_data-surgical_model" => SurgicalModel,
+    "soil_carbon-soil_incubation" => SoilIncubation,
+    "ecdc0401-covid19imperial_v2" => CovidImperial.ecdc0401_v2,
+    "ecdc0401-covid19imperial_v3" => CovidImperial.ecdc0401_v3,
+    "ecdc0501-covid19imperial_v2" => CovidImperial.ecdc0501_v2,
+    "ecdc0501-covid19imperial_v3" => CovidImperial.ecdc0501_v3,
+    "state_wide_presidential_votes-hierarchical_gp" => PresidentialGP,
+    "rstan_downloads-prophet" => Prophet,
+    "mcycle_gp-accel_gp" => McycleGP,
+    "uk_drivers-state_space_stochastic_level_stochastic_seasonal" => UKDrivers,
+    "ovarian-logistic_regression_rhs" => LogisticRHS.ovarian,
+    "prostate-logistic_regression_rhs" => LogisticRHS.prostate,
 )
 const MODEL_NAMES = sort!(collect(keys(MODELS)))
 

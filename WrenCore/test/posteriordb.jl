@@ -3,9 +3,12 @@ module WrenPosteriorDBTests
 @info "testing posteriordb.jl"
 
 import DifferentiationInterface as DI
-using Distributions: Bernoulli, Beta, Binomial, Cauchy, Dirichlet, Exponential, InverseGamma, LogNormal, Logistic, Normal, TDist, logpdf
+using Distributions: Bernoulli, Beta, Binomial, Cauchy, Dirichlet, Exponential, Gamma, InverseGamma,
+    Laplace, LocationScale, LogNormal,
+    Logistic, NegativeBinomial, Normal, Poisson, TDist, Uniform, Weibull, logpdf
 using Enzyme
 import ForwardDiff
+using LinearAlgebra: Symmetric, I, cholesky
 using PosteriorDB: PosteriorDB
 using StableRNGs
 using Statistics: mean, std
@@ -29,6 +32,15 @@ using WrenDists: WrenDists
         return FromValues(params)
     end
 
+    covid_point() = vcat(fill(log(3.28), 14), fill(log(0.1), 6), [log(0.5)],
+        fill(log(10.0), 14), [log(5.0), log(10.0)], zeros(14))
+    gp_point() = let point = 0.01 .* sin.(1:933)
+        point[912] = log(0.2)
+        point[929] = 0.5
+        point[930:933] .= log.([8.0, 8.0, 3.0, 3.0])
+        point
+    end
+
     # Helpers shared by the density and gradient testsets below. Each oracle is
     # written from the Stan program, independently of the Wren model.
     logistic(x) = inv(1 + exp(-x))
@@ -41,7 +53,7 @@ using WrenDists: WrenDists
         VecModel(posteriordb_model(name), AutoEnzyme(; mode=Reverse); kwargs...)
 
     # The density and the full native Enzyme gradient against an oracle.
-    function check(name, dimension, oracle, points; atol=1e-5)
+    function check_density_gradient(name, dimension, oracle, points; atol)
         vm = enzyme_model(name)
         @test vm.dimension == dimension
         for point in points
@@ -54,7 +66,7 @@ using WrenDists: WrenDists
     # For models too large for a full ForwardDiff gradient: the density, and the
     # native Enzyme gradient in the `selected` coordinates.
     function check_selected(vm, oracle, point, selected;
-            atol=1e-5, rtol=0.0, gradient_rtol=rtol)
+            atol=1e-5, rtol=0.0, gradient_atol=atol, gradient_rtol=rtol)
         @test vm.dimension == length(point)
         value, gradient = lp_and_grad(vm, point)
         @test isapprox(value, oracle(point); atol, rtol)
@@ -65,14 +77,19 @@ using WrenDists: WrenDists
         end
         @test isapprox(gradient[selected],
             ForwardDiff.gradient(selected_oracle, point[selected]);
-            atol, rtol=gradient_rtol)
+            atol=gradient_atol, rtol=gradient_rtol)
     end
 
+    check_discrete(name, dimension, oracle, points; atol=1e-5) =
+        check_density_gradient(name, dimension, oracle, points; atol)
+    check_classical(name, dimension, oracle, points; atol=1e-6) =
+        check_density_gradient(name, dimension, oracle, points; atol)
 
     @testset "$name" for name in available_posteriordb_models()
         model = posteriordb_model(name)
-        # LSAT has 1000 person effects; ForwardDiff's full Jacobian is too large
-        # for the generic smoke test. Its targeted checks use native Enzyme below.
+        # Several models have too many coordinates for ForwardDiff's full
+        # Jacobian in the generic smoke test (LSAT has 1000 person effects);
+        # their targeted checks use native Enzyme below.
         adtype = name in ("lsat_data-lsat_model", "election88-election88_full",
             "sat-hier_2pl", "fims_Aus_Jpn_irt-2pl_latent_reg_irt",
             "science_irt-grsm_latent_reg_irt",
@@ -80,14 +97,24 @@ using WrenDists: WrenDists
             "three_men1-ldaK2", "three_men2-ldaK2", "three_men3-ldaK2",
             "prideprejudice_chapter-ldaK5", "prideprejudice_paragraph-ldaK5",
             "traffic_accident_nyc-bym2_offset_only",
-            "mnist_100-nn_rbm1bJ10") ?
+            "mnist_100-nn_rbm1bJ10",
+            "state_wide_presidential_votes-hierarchical_gp",
+            "ovarian-logistic_regression_rhs",
+            "prostate-logistic_regression_rhs") ||
+            occursin("covid19imperial", name) ?
             AutoEnzyme(; mode=Reverse) :
             DI.AutoForwardDiff()
         pride_m = name == "prideprejudice_chapter-ldaK5" ? 61 :
             name == "prideprejudice_paragraph-ldaK5" ? 2025 : nothing
-        vm = pride_m === nothing ? VecModel(model, adtype) :
+        vm = if pride_m !== nothing
             VecModel(model, adtype; latent_source=pride_lda_source(pride_m),
                 reduce_copies=false)
+        elseif name == "state_wide_presidential_votes-hierarchical_gp" ||
+                occursin("covid19imperial", name)
+            VecModel(model, adtype; reduce_copies=false)
+        else
+            VecModel(model, adtype)
+        end
         # dogs_log uses flat coordinates with bounded likelihood factors; a
         # prior draw need not lie in their finite-density support.
         if name == "dogs-dogs_log"
@@ -95,6 +122,32 @@ using WrenDists: WrenDists
             @test isfinite(lp(vm, v))
         elseif pride_m !== nothing
             v = 0.01 .* sin.(1:vm.dimension)
+        elseif name == "state_wide_presidential_votes-hierarchical_gp"
+            v = gp_point()
+        elseif occursin("covid19imperial", name)
+            v = covid_point()
+        elseif name == "dugongs_data-dugongs_model"
+            # Gamma(shape=0.0001) prior draws commonly underflow in Float64.
+            v = [2.0, 1.0, 0.0, 0.0]
+            @test isfinite(lp(vm, v))
+        elseif name == "surgical_data-surgical_model"
+            # InverseGamma(shape=0.001) variance draws can overflow.
+            v = vcat(-3.0, 0.0, fill(-3.0, 12))
+            @test isfinite(lp(vm, v))
+        elseif name == "mcycle_splines-accel_splines"
+            # An unconstrained prior draw can produce extreme spline predictors
+            # with -Inf Normal likelihood in Float64. Use a finite reference point.
+            v = vcat([-12.0, 0.1], zeros(38), [log(5.0), 0.5, -0.1],
+                     zeros(38), [log(2.0)])
+            @test isfinite(lp(vm, v))
+        elseif name in ("ovarian-logistic_regression_rhs",
+                "prostate-logistic_regression_rhs")
+            posterior = PosteriorDB.posterior(PosteriorDB.database(), name)
+            data = PosteriorDB.load(PosteriorDB.dataset(posterior))
+            d = data["d"]
+            v = vcat(0.0, zeros(d), log(2 * data["scale_global"]),
+                zeros(d), 0.0)
+            @test isfinite(lp(vm, v))
         else
             @test isfinite(logjoint(model, parameters(model, StableRNG(468))))
             v = vector_parameters(vm, StableRNG(468))
@@ -857,7 +910,7 @@ using WrenDists: WrenDists
         end
         election_point = vcat([0.2, 0.1, -0.1, 0.2, 0.1],
             fill(log(1.0 / 99.0), 5), 0.05 .* sin.(1:(na + nb + nc + nd + ne)))
-        check("election88-election88_full", 10 + na + nb + nc + nd + ne,
+        check_discrete("election88-election88_full", 10 + na + nb + nc + nd + ne,
             election_oracle, [election_point])
 
         hmm_data = posteriordb_data("hmm_example-hmm_example")
@@ -879,7 +932,7 @@ using WrenDists: WrenDists
                 v[3] + v[4] + logpdf(Normal(3, 1), mu1) +
                 logpdf(Normal(10, 1), mu2) + logaddexp(g1, g2)
         end
-        check("hmm_example-hmm_example", 4, hmm_oracle,
+        check_discrete("hmm_example-hmm_example", 4, hmm_oracle,
             [[0.8, -1.2, log(3.0), log(7.0)],
              [-0.3, 0.4, log(2.5), log(6.5)]])
 
@@ -913,7 +966,7 @@ using WrenDists: WrenDists
             end
             return jacobian + logaddexp(logaddexp(alpha[1], alpha[2]), alpha[3])
         end
-        check("hmm_gaussian_simulated-hmm_gaussian", 14, hmm_gaussian_oracle,
+        check_discrete("hmm_gaussian_simulated-hmm_gaussian", 14, hmm_gaussian_oracle,
             [[0.2, -0.4, 0.5, -0.3, -0.2, 0.4, 0.1, -0.1,
               10.0, log(10.0), log(10.0), log(5.0), log(5.0), log(5.0)],
              [-0.2, 0.3, -0.4, 0.2, 0.3, -0.5, -0.1, 0.4,
@@ -950,11 +1003,11 @@ using WrenDists: WrenDists
             end
             return prior + logaddexp(g1, g2)
         end
-        check("bball_drive_event_0-hmm_drive_0", 6,
+        check_discrete("bball_drive_event_0-hmm_drive_0", 6,
             v -> bball_oracle(v, bball_data[1], false),
             [[0.7, -0.5, log(6.0), log(2.0), log(0.02), log(0.03)],
              [-0.1, 0.3, log(5.0), log(2.5), log(0.025), log(0.02)]])
-        check("bball_drive_event_1-hmm_drive_1", 6,
+        check_discrete("bball_drive_event_1-hmm_drive_1", 6,
             v -> bball_oracle(v, bball_data[2], true),
             [[0.7, -0.5, -1.8, log(1.5), 3.9, log(1.0)],
              [-0.1, 0.3, -1.7, log(1.4), 3.8, log(1.2)]])
@@ -988,7 +1041,7 @@ using WrenDists: WrenDists
         # At zero all three states tie in every forward step. A `logaddexp` that
         # drops the derivative at a tie gives 0.889 instead of 8189.55 for the
         # second residual scale there.
-        check("iohmm_reg_simulated-iohmm_reg", 29, iohmm_oracle,
+        check_discrete("iohmm_reg_simulated-iohmm_reg", 29, iohmm_oracle,
             [zeros(29),
              vcat([-0.3, 0.5], 0.15 .* cos.(1:24),
                  [log(2.5), log(3.5), log(4.0)])])
@@ -1038,7 +1091,7 @@ using WrenDists: WrenDists
         butterfly_S = butterfly_data["S"]
         butterfly_point = vcat([0.1, -0.2, 0.2, 0.1, log(0.8), log(1.2)],
             0.03 .* sin.(1:butterfly_S), 0.03 .* cos.(1:butterfly_S))
-        check("butterfly-multi_occupancy", 6 + 2butterfly_S,
+        check_discrete("butterfly-multi_occupancy", 6 + 2butterfly_S,
             butterfly_oracle, [butterfly_point])
 
         dog_nonhier_data = posteriordb_data("dogs-dogs_nonhierarchical")
@@ -1074,7 +1127,7 @@ using WrenDists: WrenDists
         dog_nonhier_J = dog_nonhier_data["n_dogs"]
         dog_nonhier_point = vcat([-0.3, 0.2, log(0.5), log(0.6), 0.1],
             0.05 .* sin.(1:dog_nonhier_J), 0.05 .* cos.(1:dog_nonhier_J))
-        check("dogs-dogs_nonhierarchical", 5 + 2dog_nonhier_J,
+        check_discrete("dogs-dogs_nonhierarchical", 5 + 2dog_nonhier_J,
             dog_nonhier_oracle, [dog_nonhier_point])
 
         sat_data = posteriordb_data("sat-hier_2pl")
@@ -1249,7 +1302,7 @@ using WrenDists: WrenDists
                 phi2[lda_docs_data["w"][n]]) for n in 1:lda_docs_data["N"])
             return prior + likelihood
         end
-        check("three_docs1200-ldaK2", 7, lda_docs_oracle,
+        check_discrete("three_docs1200-ldaK2", 7, lda_docs_oracle,
             [[0.2, -0.3, 0.4, -0.2, 0.1, 0.3, -0.4]])
 
         function lda_simplex_oracle(raw, V)
@@ -1420,7 +1473,7 @@ using WrenDists: WrenDists
             return -3log(100sqrt(2π)) - sum(abs2, v) / 20000 +
                 sum(bernoulli_logit.(dog_response, eta))
         end
-        check("dogs-dogs", 3, dogs_oracle, [[0.2, -0.1, 0.1], [-0.1, 0.1, -0.1]])
+        check_discrete("dogs-dogs", 3, dogs_oracle, [[0.2, -0.1, 0.1], [-0.1, 0.1, -0.1]])
 
         function dogs_hierarchical_oracle(v)
             a = logistic(v[1])
@@ -1430,14 +1483,14 @@ using WrenDists: WrenDists
             return logit_jacobian(v[1]) + logit_jacobian(v[2]) +
                 sum(dog_response[i] == 1 ? log(p[i]) : log1p(-p[i]) for i in keep)
         end
-        check("dogs-dogs_hierarchical", 2, dogs_hierarchical_oracle,
+        check_discrete("dogs-dogs_hierarchical", 2, dogs_hierarchical_oracle,
             [[0.2, -0.3], [-0.2, 0.1]])
 
         function dogs_log_oracle(v)
             eta = v[1] .* dog_avoids .+ v[2] .* dog_shocks
             return -2log(100) + sum(bernoulli_logit.(dog_response, eta))
         end
-        check("dogs-dogs_log", 2, dogs_log_oracle,
+        check_discrete("dogs-dogs_log", 2, dogs_log_oracle,
             [[-0.2, 0.3], [-0.1, 0.1]])
 
         glmm_data = posteriordb_data("GLMM_data-GLMM1_model")
@@ -1456,7 +1509,7 @@ using WrenDists: WrenDists
                 logit_jacobian(v[nsite + 2]) +
                 sum(obs .* eta .- exp.(eta) .- log_factorial)
         end
-        check("GLMM_data-GLMM1_model", nsite + 2, glmm_oracle,
+        check_discrete("GLMM_data-GLMM1_model", nsite + 2, glmm_oracle,
             [vcat(0.04 .* sin.(1:nsite), 0.2, -0.1),
              vcat(0.03 .* cos.(1:nsite), -0.1, 0.2)])
 
@@ -1465,7 +1518,7 @@ using WrenDists: WrenDists
             eta = v[1] .+ v[2] .* nes_data["income"]
             return sum(bernoulli_logit.(nes_data["vote"], eta))
         end
-        check("nes_logit_data-nes_logit_model", 2, nes_oracle,
+        check_discrete("nes_logit_data-nes_logit_model", 2, nes_oracle,
             [[0.2, -0.1], [-0.1, 0.1]])
 
         survey_data = posteriordb_data("Survey_data-Survey_model")
@@ -1478,7 +1531,7 @@ using WrenDists: WrenDists
                 for n in nmin:nmax]
             return reduce(logaddexp, parts) + logit_jacobian(v[1])
         end
-        check("Survey_data-Survey_model", 1, survey_oracle, [[0.2], [-0.3]])
+        check_discrete("Survey_data-Survey_model", 1, survey_oracle, [[0.2], [-0.3]])
     end
 
     @testset "capture-recapture densities and native Enzyme gradients" begin
@@ -1501,7 +1554,7 @@ using WrenDists: WrenDists
             rowlogp = [logpdf(Binomial(trials0, p), count) for count in counts0]
             return sum(logit_jacobian, v) + marginalized(omega, rowlogp, counts0)
         end
-        check("M0_data-M0_model", 2, m0_reference, [[0.1, -0.2], [-0.3, 0.2]];
+        check_discrete("M0_data-M0_model", 2, m0_reference, [[0.1, -0.2], [-0.3, 0.2]];
             atol=1e-6)
 
         yb, countsb = capture_data("Mb_data-Mb_model")
@@ -1513,7 +1566,7 @@ using WrenDists: WrenDists
             end for j in axes(yb, 2)) for i in axes(yb, 1)]
             return sum(logit_jacobian, v) + marginalized(omega, rowlogp, countsb)
         end
-        check("Mb_data-Mb_model", 3, mb_reference,
+        check_discrete("Mb_data-Mb_model", 3, mb_reference,
             [[0.1, -0.2, 0.3], [-0.3, 0.2, -0.1]]; atol=1e-6)
 
         yt, countst = capture_data("Mt_data-Mt_model")
@@ -1525,7 +1578,7 @@ using WrenDists: WrenDists
                 for j in axes(yt, 2)) for i in axes(yt, 1)]
             return sum(logit_jacobian, v) + marginalized(omega, rowlogp, countst)
         end
-        check("Mt_data-Mt_model", trials_t + 1, mt_reference,
+        check_discrete("Mt_data-Mt_model", trials_t + 1, mt_reference,
             [0.2 .* sin.(1:(trials_t + 1)), -0.2 .* cos.(1:(trials_t + 1))];
             atol=1e-6)
 
@@ -1542,7 +1595,7 @@ using WrenDists: WrenDists
                 sum(logpdf(Normal(), e) for e in eps_raw) +
                 marginalized(omega, rowlogp, countsh)
         end
-        check("Mth_data-Mth_model", m_h + t_h + 2, mth_reference,
+        check_discrete("Mth_data-Mth_model", m_h + t_h + 2, mth_reference,
             [vcat(0.2 .* sin.(1:(t_h + 2)), 0.03 .* cos.(1:m_h))]; atol=1e-6)
 
         ybh, countsbh = capture_data("Mtbh_data-Mtbh_model")
@@ -1562,7 +1615,7 @@ using WrenDists: WrenDists
                 sum(logpdf(Normal(), e) for e in eps_raw) +
                 marginalized(omega, rowlogp, countsbh)
         end
-        check("Mtbh_data-Mtbh_model", m_bh + t_bh + 3, mtbh_reference,
+        check_discrete("Mtbh_data-Mtbh_model", m_bh + t_bh + 3, mtbh_reference,
             [vcat(0.2 .* cos.(1:(t_bh + 3)), 0.03 .* sin.(1:m_bh))]; atol=1e-6)
     end
 
@@ -1592,7 +1645,7 @@ using WrenDists: WrenDists
             return total
         end
         irt_dimension = J + 2I + 4
-        check("irt_2pl-irt_2pl", irt_dimension, irt_reference,
+        check_discrete("irt_2pl-irt_2pl", irt_dimension, irt_reference,
             [vcat([0.1], 0.1 .* sin.(1:J), [-0.2], 0.1 .* cos.(1:I),
                   [0.2, -0.1], 0.1 .* sin.(1:I))]; atol=1e-6)
 
@@ -1612,7 +1665,7 @@ using WrenDists: WrenDists
             end
             return total
         end
-        check("bones_data-bones_model", bones_data["nChild"], bones_reference,
+        check_discrete("bones_data-bones_model", bones_data["nChild"], bones_reference,
             [0.1 .* sin.(1:bones_data["nChild"]),
              0.2 .* cos.(1:bones_data["nChild"])]; atol=1e-6)
 
@@ -1650,6 +1703,609 @@ using WrenDists: WrenDists
             finite_difference = (lsat_reference(plus) - lsat_reference(minus)) / 2e-5
             @test isapprox(gradient[index], finite_difference; atol=1e-4, rtol=1e-4)
         end
+    end
+
+    @testset "Imperial COVID-19 densities and native Enzyme gradients" begin
+        for name in ("ecdc0401-covid19imperial_v2",
+                "ecdc0501-covid19imperial_v3")
+            data = posteriordb_data(name)
+            function covid_oracle(v)
+                mu = exp.(view(v, 1:14))
+                alpha_hier = exp.(view(v, 15:20))
+                kappa = exp(v[21])
+                infections = exp.(view(v, 22:35))
+                phi, tau = exp(v[36]), exp(v[37])
+                ifr_noise = exp.(view(v, 38:51))
+                alpha = alpha_hier .- log(1.05) / 6
+                density = logpdf(Exponential(inv(0.03)), tau) + v[37] +
+                    logpdf(Normal(0, 5), phi) + v[36] +
+                    logpdf(Normal(0, 0.5), kappa) + v[21]
+                density += sum(logpdf(Gamma(0.1667, 1), alpha_hier[j]) +
+                    v[14 + j] for j in 1:6)
+                for m in 1:14
+                    density += logpdf(Normal(3.28, kappa), mu[m]) + v[m] +
+                        logpdf(Exponential(tau), infections[m]) + v[21 + m] +
+                        logpdf(Normal(1, 0.1), ifr_noise[m]) + v[37 + m]
+                    prediction = fill(infections[m], data["N0"])
+                    for day in (data["N0"] + 1):data["N2"]
+                        convolution = sum(prediction[previous] *
+                            data["SI"][day - previous] for previous in 1:(day - 1))
+                        rt = mu[m] * exp(-sum(data["X"][m, day, j] * alpha[j]
+                            for j in 1:6))
+                        push!(prediction, (1 - sum(prediction) / data["pop"][m]) *
+                            rt * convolution)
+                    end
+                    for day in data["EpidemicStart"][m]:data["N"][m]
+                        expected = ifr_noise[m] * sum(prediction[previous] *
+                            data["f"][day - previous, m]
+                            for previous in 1:(day - 1))
+                        density += logpdf(NegativeBinomial(phi,
+                            phi / (phi + expected)), data["deaths"][day, m])
+                    end
+                end
+                return density
+            end
+            point = covid_point()
+            vm = enzyme_model(name; reduce_copies=false)
+            if name == "ecdc0401-covid19imperial_v2"
+                check_selected(vm, covid_oracle, point, [1, 15, 21, 22, 36, 37, 51];
+                    gradient_atol=1e-4, gradient_rtol=1e-7)
+            else
+                @test vm.dimension == length(point)
+                @test isapprox(lp(vm, point), covid_oracle(point); atol=1e-5)
+            end
+        end
+    end
+
+    @testset "presidential hierarchical GP density and gradient" begin
+        name = "state_wide_presidential_votes-hierarchical_gp"
+        data = posteriordb_data(name)
+        function gp_oracle(v)
+            gp_region_std = reshape(view(v, 1:140), 14, 10)
+            gp_state_std = reshape(view(v, 141:840), 14, 50)
+            year_std = view(v, 841:851)
+            state_std = view(v, 852:901)
+            region_std = view(v, 902:911)
+            tot_var = exp(v[912])
+            prop_var = Vector{eltype(v)}(undef, 17)
+            remaining = one(eltype(v))
+            jacobian = zero(eltype(v))
+            for r in 1:16
+                z = inv(1 + exp(-(v[912 + r] - log(17 - r))))
+                prop_var[r] = remaining * z
+                jacobian += log(z) + log1p(-z) + log(remaining)
+                remaining *= 1 - z
+            end
+            prop_var[17] = remaining
+            mu = v[929]
+            lengths = exp.(view(v, 930:933))
+            vars = 17 .* prop_var .* tot_var
+            function covariance(long_scale, short_scale, long_length,
+                    short_length)
+                matrix = Matrix{eltype(v)}(undef, 14, 14)
+                for j in 1:14, i in 1:14
+                    distance = i - j
+                    matrix[i, j] = long_scale^2 *
+                        exp(-0.5 * (distance / long_length)^2) +
+                        short_scale^2 * exp(-0.5 *
+                        (distance / short_length)^2) +
+                        (i == j ? 1e-6 : 0.0)
+                end
+                return matrix
+            end
+            gp_region = cholesky(Symmetric(covariance(sqrt(vars[13]),
+                sqrt(vars[15]), lengths[1], lengths[3]))).L * gp_region_std
+            gp_state = cholesky(Symmetric(covariance(sqrt(vars[14]),
+                sqrt(vars[16]), lengths[2], lengths[4]))).L * gp_state_std
+            density = sum(logpdf(Normal(), v[i]) for i in 1:911) +
+                logpdf(Gamma(3, 1 / 3), tot_var) + v[912] +
+                logpdf(Dirichlet(fill(2.0, 17)), prop_var) + jacobian +
+                logpdf(Normal(0.5, 0.5), mu)
+            for (r, prior) in enumerate((Weibull(30, 8), Weibull(30, 8),
+                    Weibull(30, 3), Weibull(30, 3)))
+                density += logpdf(prior, lengths[r]) + v[929 + r]
+            end
+            for n in 1:data["N"]
+                state, region, year = data["state_ind"][n],
+                    data["region_ind"][n], data["year_ind"][n]
+                state_region = data["state_region_ind"][state]
+                expected = mu + sqrt(vars[1]) * year_std[year] +
+                    sqrt(vars[2 + state_region]) * state_std[state] +
+                    sqrt(vars[2]) * region_std[region] +
+                    gp_region[year, region] + gp_state[year, state]
+                density += logpdf(Normal(expected, sqrt(vars[17])), data["y"][n])
+            end
+            return density
+        end
+        check_selected(enzyme_model(name; reduce_copies=false), gp_oracle,
+            gp_point(), [1, 140, 141, 840, 912, 913, 928, 930, 933];
+            rtol=1e-8, gradient_atol=1e-4, gradient_rtol=1e-7)
+    end
+
+    @testset "classical PosteriorDB densities and native Enzyme gradients" begin
+        seed_data = posteriordb_data("seeds_data-seeds_model")
+        k, N, x1, x2 = seed_data["n"], seed_data["N"], seed_data["x1"], seed_data["x2"]
+        nobs = length(k)
+        log_choose = [logpdf(Binomial(N[i], 0.5), k[i]) + N[i] * log(2)
+            for i in eachindex(k)]
+        function seed_likelihood(alpha, b)
+            eta = alpha[1] .+ alpha[2] .* x1 .+ alpha[4] .* x2 .+
+                alpha[3] .* (x1 .* x2) .+ b
+            return sum(log_choose[i] + k[i] * eta[i] - N[i] * log1p(exp(eta[i]))
+                for i in eachindex(k))
+        end
+        function seeds_reference(v)
+            alpha = view(v, 1:4)
+            tau = exp(v[5])
+            sigma = inv(sqrt(tau))
+            b = view(v, 6:length(v))
+            return sum(logpdf(Normal(0, 1000), a) for a in alpha) +
+                logpdf(Gamma(0.001, 1000), tau) + v[5] +
+                sum(logpdf(Normal(0, sigma), bi) for bi in b) +
+                seed_likelihood(alpha, b)
+        end
+        check_classical("seeds_data-seeds_model", nobs + 5, seeds_reference,
+            [vcat([0.1, -0.2, 0.15, 0.3, -0.1], 0.05 .* sin.(1:nobs))])
+
+        function seeds_cauchy_reference(v, centered)
+            alpha = view(v, 1:4)
+            c = view(v, 5:(4 + nobs))
+            sigma = exp(v[end])
+            b = centered ? c .- sum(c) / nobs : c
+            return sum(logpdf(Normal(), a) for a in alpha) +
+                logpdf(Cauchy(0, 1), sigma) + log(2) + v[end] +
+                sum(logpdf(Normal(0, sigma), ci) for ci in c) +
+                seed_likelihood(alpha, b)
+        end
+        for (name, centered) in (
+            ("seeds_data-seeds_centered_model", true),
+            ("seeds_data-seeds_stanified_model", false),
+        )
+            reference(v) = seeds_cauchy_reference(v, centered)
+            check_classical(name, nobs + 5, reference,
+                [vcat([0.1, -0.2, 0.15, 0.3], 0.05 .* sin.(1:nobs), -0.1)])
+        end
+
+        dugong_data = posteriordb_data("dugongs_data-dugongs_model")
+        function dugongs_reference(v)
+            alpha, beta = v[1], v[2]
+            lambda = 0.5 + 0.5 * logistic(v[3])
+            tau = exp(v[4])
+            sigma = inv(sqrt(tau))
+            x, y = dugong_data["x"], dugong_data["Y"]
+            return logpdf(Normal(0, 1000), alpha) +
+                logpdf(Normal(0, 1000), beta) + logit_jacobian(v[3]) +
+                logpdf(Gamma(0.0001, 10000), tau) + v[4] +
+                sum(logpdf(Normal(alpha - beta * lambda^x[i], sigma), y[i])
+                    for i in eachindex(y))
+        end
+        check_classical("dugongs_data-dugongs_model", 4, dugongs_reference,
+            [[2.0, 1.0, -0.3, -0.1]])
+
+        mixture_data = posteriordb_data("normal_2-normal_mixture")
+        function normal_mixture_reference(v)
+            theta = logistic(v[1])
+            mu1, mu2 = v[2], v[3]
+            return logit_jacobian(v[1]) +
+                logpdf(Normal(0, 10), mu1) + logpdf(Normal(0, 10), mu2) +
+                sum(log(theta * exp(logpdf(Normal(mu1, 1), yi)) +
+                        (1 - theta) * exp(logpdf(Normal(mu2, 1), yi)))
+                    for yi in mixture_data["y"])
+        end
+        # At zero both components are equal in every observation. A `logaddexp`
+        # that drops the derivative at a tie gives `[500, 4197.33, 0]` there
+        # instead of `[0, 2098.66, 2098.66]`.
+        check_classical("normal_2-normal_mixture", 3, normal_mixture_reference,
+            [zeros(3), [0.2, -0.8, 0.9]])
+
+        sesame_data = posteriordb_data("sesame_data-sesame_one_pred_a")
+        function sesame_reference(v)
+            sigma = exp(v[3])
+            return v[3] + sum(logpdf(Normal(v[1] + v[2] *
+                sesame_data["encouraged"][i], sigma), sesame_data["watched"][i])
+                for i in eachindex(sesame_data["watched"]))
+        end
+        check_classical("sesame_data-sesame_one_pred_a", 3, sesame_reference,
+            [[0.2, 0.3, log(0.8)]])
+
+        garch_data = posteriordb_data("garch-garch11")
+        function garch_reference(v)
+            mu = v[1]
+            alpha0 = exp(v[2])
+            alpha1 = logistic(v[3])
+            beta1 = (1 - alpha1) * logistic(v[4])
+            # Positive-flat alpha0, then the two scaled-logit coordinates.
+            prior = v[2] + logpdf(Beta(1, 2), alpha1) + logit_jacobian(v[3]) +
+                logpdf(Uniform(0, 1 - alpha1), beta1) + log1p(-alpha1) +
+                logit_jacobian(v[4])
+            y = garch_data["y"]
+            sigma = garch_data["sigma1"]
+            density = logpdf(Normal(mu, sigma), y[1])
+            for t in 2:length(y)
+                sigma = sqrt(alpha0 + alpha1 * (y[t - 1] - mu)^2 +
+                    beta1 * sigma^2)
+                density += logpdf(Normal(mu, sigma), y[t])
+            end
+            return prior + density
+        end
+        # The last point is close to the boundary alpha1 + beta1 = 1.
+        check_classical("garch-garch11", 4, garch_reference,
+            [[0.15, log(0.5), 0.3, -0.4], [0.05, log(0.3), 4.0, 1.5]])
+
+        surgical_data = posteriordb_data("surgical_data-surgical_model")
+        function surgical_reference(v)
+            mu = v[1]
+            sigmasq = exp(v[2])
+            sigma = sqrt(sigmasq)
+            b = view(v, 3:length(v))
+            return logpdf(Normal(0, 1000), mu) +
+                logpdf(InverseGamma(0.001, 0.001), sigmasq) + v[2] +
+                sum(logpdf(Normal(mu, sigma), bi) for bi in b) +
+                sum(logpdf(Binomial(surgical_data["n"][i], logistic(b[i])),
+                    surgical_data["r"][i]) for i in eachindex(b))
+        end
+        check_classical("surgical_data-surgical_model", 14, surgical_reference,
+            [vcat(-2.5, 0.5, -2.5 .+ 0.1 .* cos.(1:12))])
+
+        prophet_data = posteriordb_data("rstan_downloads-prophet")
+        n_changes, n_beta = prophet_data["S"], prophet_data["K"]
+        function prophet_reference(v)
+            k, m = v[1], v[2]
+            delta = view(v, 3:(2 + n_changes))
+            log_sigma = v[3 + n_changes]
+            sigma = exp(log_sigma)
+            beta = view(v, (4 + n_changes):length(v))
+            t, t_change = prophet_data["t"], prophet_data["t_change"]
+            X = prophet_data["X"]
+            A = Float64.(t .>= t_change')
+            trend = (k .+ A * delta) .* t .+ m .- A * (t_change .* delta)
+            mu = trend .* (1 .+ X * (beta .* prophet_data["s_m"])) .+
+                X * (beta .* prophet_data["s_a"])
+            return logpdf(Normal(0, 5), k) + logpdf(Normal(0, 5), m) +
+                sum(logpdf(Laplace(0, prophet_data["tau"]), d) for d in delta) +
+                logpdf(Normal(0, 0.5), sigma) + log(2.0) + log_sigma +
+                sum(logpdf(Normal(0, prophet_data["sigmas"][j]), beta[j])
+                    for j in eachindex(beta)) +
+                sum(logpdf(Normal(mu[i], sigma), prophet_data["y"][i])
+                    for i in eachindex(mu))
+        end
+        check_classical("rstan_downloads-prophet", 3 + n_changes + n_beta,
+            prophet_reference,
+            [vcat(0.1, 0.5, 0.01 .* sin.(1:n_changes), log(0.3),
+                0.01 .* cos.(1:n_beta))])
+
+        mcycle_gp_data = posteriordb_data("mcycle_gp-accel_gp")
+        function mcycle_gp_reference(v)
+            intercept, sdgp, lscale = v[1], exp(v[2]), exp(v[3])
+            zgp = view(v, 4:43)
+            intercept_sigma, sdgp_sigma, lscale_sigma =
+                v[44], exp(v[45]), exp(v[46])
+            zgp_sigma = view(v, 47:66)
+            alpha, beta = 1.124909, 0.0177
+            student_t(mu, scale, x) = logpdf(TDist(3), (x - mu) / scale) - log(scale)
+            prior = student_t(-13, 36, intercept) +
+                student_t(0, 36, sdgp) + log(2.0) + v[2] +
+                logpdf(InverseGamma(alpha, beta), lscale) + v[3] +
+                sum(logpdf(Normal(), zi) for zi in zgp) +
+                student_t(0, 10, intercept_sigma) +
+                student_t(0, 36, sdgp_sigma) + log(2.0) + v[45] +
+                logpdf(InverseGamma(alpha, beta), lscale_sigma) + v[46] +
+                sum(logpdf(Normal(), zi) for zi in zgp_sigma)
+            function gp_values(X, frequencies, z, sd, lengthscale)
+                weights = [sqrt(sd^2 * sqrt(2 * pi) * lengthscale *
+                    exp(-0.5 * lengthscale^2 * frequencies[m]^2)) * z[m]
+                    for m in eachindex(z)]
+                return [sum(X[n, m] * weights[m] for m in eachindex(z))
+                    for n in axes(X, 1)]
+            end
+            mean_gp = gp_values(mcycle_gp_data["Xgp_1"],
+                vec(mcycle_gp_data["slambda_1"]), zgp, sdgp, lscale)
+            scale_gp = gp_values(mcycle_gp_data["Xgp_sigma_1"],
+                vec(mcycle_gp_data["slambda_sigma_1"]), zgp_sigma,
+                sdgp_sigma, lscale_sigma)
+            likelihood = sum(logpdf(Normal(intercept + mean_gp[n],
+                exp(intercept_sigma + scale_gp[n])), mcycle_gp_data["Y"][n])
+                for n in eachindex(mean_gp))
+            return prior + likelihood
+        end
+        check_classical("mcycle_gp-accel_gp", 66, mcycle_gp_reference,
+            [vcat([-13.0, log(10.0), log(0.05)], 0.05 .* sin.(1:40),
+                [3.0, log(2.0), log(0.06)], 0.05 .* cos.(1:20))])
+
+        uk_data = posteriordb_data(
+            "uk_drivers-state_space_stochastic_level_stochastic_seasonal")
+        function uk_drivers_reference(v)
+            n = uk_data["n"]
+            y, x, w = uk_data["y"], uk_data["x"], uk_data["w"]
+            lower = mean(y) - 3 * std(y)
+            width = 6 * std(y)
+            mu = lower .+ width .* logistic.(view(v, 1:n))
+            seasonal = view(v, (n + 1):(2n))
+            beta, lambda = v[2n + 1], v[2n + 2]
+            sigma1 = exp(v[2n + 3])
+            sigma2 = sigma1 + exp(v[2n + 4])
+            sigma3 = sigma2 + exp(v[2n + 5])
+            prior = sum(logit_jacobian(v[t]) for t in 1:n) +
+                sum(logpdf(Normal(-sum(seasonal[(t - 11):(t - 1)]), sigma1),
+                    seasonal[t]) for t in 12:n) +
+                sum(logpdf(Normal(mu[t - 1], sigma2), mu[t]) for t in 2:n) +
+                sum(logpdf(Normal(mu[t] + beta * x[t] + lambda * w[t] +
+                    seasonal[t], sigma3), y[t]) for t in 1:n)
+            prior += sum(logpdf(TDist(4), s) for s in (sigma1, sigma2, sigma3)) +
+                sum(v[(2n + 3):(2n + 5)])
+            return prior
+        end
+        n_uk = uk_data["n"]
+        uk_point = vcat(0.02 .* sin.(1:n_uk), 0.01 .* cos.(1:n_uk),
+            [0.0, 0.0, log(0.05), log(0.05), log(0.1)])
+        check_classical("uk_drivers-state_space_stochastic_level_stochastic_seasonal",
+            2n_uk + 5, uk_drivers_reference, [uk_point])
+
+        for name in ("ovarian-logistic_regression_rhs",
+                "prostate-logistic_regression_rhs")
+            data = posteriordb_data(name)
+            d, n = data["d"], data["n"]
+            function rhs_reference(v)
+                beta0 = v[1]
+                z = view(v, 2:(d + 1))
+                tau = exp(v[d + 2])
+                lambda = exp.(view(v, (d + 3):(2d + 2)))
+                caux = exp(v[end])
+                prior = logpdf(Normal(0, data["scale_icept"]), beta0) +
+                    sum(logpdf(Normal(), zj) for zj in z) +
+                    logpdf(TDist(data["nu_global"]),
+                        tau / (2 * data["scale_global"])) -
+                    log(2 * data["scale_global"]) + v[d + 2] +
+                    sum(logpdf(TDist(data["nu_local"]), lambda[j]) +
+                        v[d + 2 + j] for j in 1:d) +
+                    (d + 1) * log(2.0) +
+                    logpdf(InverseGamma(data["slab_df"] / 2,
+                        data["slab_df"] / 2), caux) + v[end]
+                c2 = data["slab_scale"]^2 * caux
+                beta = [z[j] * tau * sqrt(c2 * lambda[j]^2 /
+                    (c2 + tau^2 * lambda[j]^2)) for j in 1:d]
+                likelihood = zero(prior)
+                for i in 1:n
+                    eta = beta0 + sum(data["x"][i, j] * beta[j] for j in 1:d)
+                    likelihood += data["y"][i] * eta - log1p(exp(eta))
+                end
+                return prior + likelihood
+            end
+            point = vcat(0.1, 0.01 .* sin.(1:d),
+                log(2 * data["scale_global"]),
+                0.02 .* cos.(1:d), 0.0)
+            check_selected(enzyme_model(name), rhs_reference, point,
+                [1, 2, d + 1, d + 2, d + 3, 2d + 2, 2d + 3];
+                rtol=1e-8, gradient_rtol=1e-6)
+        end
+    end
+
+    @testset "additional Gaussian mixture densities and native Enzyme gradients" begin
+        low_dim_name = "low_dim_gauss_mix_collapse-low_dim_gauss_mix_collapse"
+        low_dim_data = posteriordb_data(low_dim_name)
+        function low_dim_reference(v)
+            mu = view(v, 1:2)
+            sigma = exp.(view(v, 3:4))
+            theta = logistic(v[5])
+            return sum(logpdf(Normal(0, 2), m) for m in mu) +
+                sum(logpdf(Normal(0, 2), sigma[i]) + log(2) + v[i + 2]
+                    for i in 1:2) +
+                logpdf(Beta(5, 5), theta) + logit_jacobian(v[5]) +
+                sum(log(theta * exp(logpdf(Normal(mu[1], sigma[1]), yi)) +
+                        (1 - theta) * exp(logpdf(Normal(mu[2], sigma[2]), yi)))
+                    for yi in low_dim_data["y"])
+        end
+        # At zero the two components are equal: a tie in every observation.
+        check_classical(low_dim_name, 5, low_dim_reference,
+            [zeros(5), [0.2, -0.7, -0.1, 0.3, -0.4]])
+
+        ordered_name = "low_dim_gauss_mix-low_dim_gauss_mix"
+        ordered_data = posteriordb_data(ordered_name)
+        function ordered_reference(v)
+            mu = [v[1], v[1] + exp(v[2])]
+            sigma = exp.(view(v, 3:4))
+            theta = logistic(v[5])
+            return sum(logpdf(Normal(0, 2), m) for m in mu) + v[2] +
+                sum(logpdf(Normal(0, 2), sigma[i]) + log(2) + v[i + 2]
+                    for i in 1:2) +
+                logpdf(Beta(5, 5), theta) + logit_jacobian(v[5]) +
+                sum(log(theta * exp(logpdf(Normal(mu[1], sigma[1]), yi)) +
+                        (1 - theta) * exp(logpdf(Normal(mu[2], sigma[2]), yi)))
+                    for yi in ordered_data["y"])
+        end
+        check_classical(ordered_name, 5, ordered_reference, [[-0.4, 0.3, 0.1, -0.2, 0.5]])
+
+        mixture_name = "normal_5-normal_mixture_k"
+        mixture_data = posteriordb_data(mixture_name)
+        extension = Base.get_extension(WrenCore, :WrenCorePosteriorDBExt)
+        theta = [0.08, 0.12, 0.20, 0.25, 0.35]
+        mu = [-1.1, -0.4, 0.3, 0.9, 1.5]
+        sigma = [0.7, 0.8, 1.0, 1.2, 1.4]
+        expected_likelihood = sum(log(sum(theta[k] *
+            exp(logpdf(Normal(mu[k], sigma[k]), yi)) for k in eachindex(theta)))
+            for yi in mixture_data["y"])
+        @test isapprox(extension.NormalMixtureK.mixture_k_logp(
+            theta, mu, sigma, mixture_data["y"]), expected_likelihood; atol=1e-6)
+        model = posteriordb_model(mixture_name)
+        enzyme_vm = VecModel(model, AutoEnzyme(; mode=Reverse))
+        forward_vm = VecModel(model, DI.AutoForwardDiff())
+        @test enzyme_vm.dimension == forward_vm.dimension == 14
+        for point in (zeros(14), vcat([0.2, -0.1, 0.15, -0.2], mu,
+                                    [-0.1, 0.2, -0.2, 0.1, 0.3]))
+            value, gradient = lp_and_grad(enzyme_vm, point)
+            @test isfinite(value)
+            @test isapprox(value, lp(forward_vm, point); atol=1e-6)
+            @test isapprox(gradient, ForwardDiff.gradient(
+                v -> lp(forward_vm, v), point); atol=1e-6)
+        end
+    end
+
+    @testset "continuous PosteriorDB densities and native Enzyme gradients" begin
+        sblrc_data = posteriordb_data("sblrc-blr")
+        function sblrc_reference(v)
+            beta = view(v, 1:5)
+            sigma = exp(v[6])
+            mu = sblrc_data["X"] * beta
+            return sum(logpdf(Normal(0, 10), b) for b in beta) +
+                logpdf(Normal(0, 10), sigma) + log(2) + v[6] +
+                sum(logpdf(Normal(mu[i], sigma), sblrc_data["y"][i])
+                    for i in eachindex(mu))
+        end
+        check_classical("sblrc-blr", 6, sblrc_reference,
+            [[0.1, -0.2, 0.3, 0.05, -0.1, -0.2]])
+
+        gp_data = posteriordb_data("gp_pois_regr-gp_pois_regr")
+        gp_dist_sq = (gp_data["x"] .- gp_data["x"]') .^ 2
+        function gp_pois_reference(v)
+            rho, alpha = exp(v[1]), exp(v[2])
+            f_tilde = view(v, 3:length(v))
+            covariance = alpha^2 .* exp.(-0.5 .* gp_dist_sq ./ rho^2) +
+                1e-10I
+            f = cholesky(Symmetric(covariance)).L * f_tilde
+            return logpdf(Gamma(25, 1 / 4), rho) + v[1] +
+                logpdf(Normal(0, 2), alpha) + log(2) + v[2] +
+                sum(logpdf(Normal(), ft) for ft in f_tilde) +
+                sum(logpdf(Poisson(exp(f[i])), gp_data["k"][i])
+                    for i in eachindex(f))
+        end
+        check_classical("gp_pois_regr-gp_pois_regr", 13, gp_pois_reference,
+            [vcat([log(6.0), log(1.5)], 0.1 .* sin.(1:11))])
+
+        spline_data = posteriordb_data("mcycle_splines-accel_splines")
+        function spline_reference(v)
+            intercept = v[1]
+            bs = view(v, 2:2)
+            zs = view(v, 3:40)
+            sds = exp(v[41])
+            intercept_sigma = v[42]
+            bs_sigma = view(v, 43:43)
+            zs_sigma = view(v, 44:81)
+            sds_sigma = exp(v[82])
+            total = logpdf(LocationScale(-13, 36, TDist(3)), intercept) +
+                sum(logpdf(Normal(), z) for z in zs) +
+                logpdf(LocationScale(0, 36, TDist(3)), sds) + log(2) + v[41] +
+                logpdf(LocationScale(0, 10, TDist(3)), intercept_sigma) +
+                sum(logpdf(Normal(), z) for z in zs_sigma) +
+                logpdf(LocationScale(0, 36, TDist(3)), sds_sigma) + log(2) + v[82]
+            if spline_data["prior_only"] == 0
+                mu = intercept .+ spline_data["Xs"] * bs .+
+                    spline_data["Zs_1_1"] * (sds .* zs)
+                log_sigma = intercept_sigma .+ spline_data["Xs_sigma"] * bs_sigma .+
+                    spline_data["Zs_sigma_1_1"] * (sds_sigma .* zs_sigma)
+                total += sum(logpdf(Normal(mu[i], exp(log_sigma[i])),
+                    spline_data["Y"][i]) for i in eachindex(mu))
+            end
+            return total
+        end
+        check_classical("mcycle_splines-accel_splines", 82, spline_reference,
+            [vcat([-10.0, -0.1], 0.01 .* sin.(1:38),
+                  [log(4.0), 0.2, 0.05], 0.01 .* cos.(1:38), [log(1.5)])])
+
+        arma_data = posteriordb_data("arma-arma11")
+        function arma_reference(v)
+            mu, phi, theta, sigma = v[1], v[2], v[3], exp(v[4])
+            y = arma_data["y"]
+            errors = [y[1] - (mu + phi * mu)]
+            for t in 2:length(y)
+                push!(errors, y[t] - (mu + phi * y[t - 1] + theta * errors[end]))
+            end
+            return logpdf(Normal(0, 10), mu) + logpdf(Normal(0, 2), phi) +
+                logpdf(Normal(0, 2), theta) + logpdf(Cauchy(0, 2.5), sigma) +
+                log(2) + v[4] + sum(logpdf(Normal(0, sigma), e) for e in errors)
+        end
+        check_classical("arma-arma11", 4, arma_reference,
+            [[0.2, 0.5, -0.3, -0.2]])
+
+        loss_data = posteriordb_data("loss_curves-losscurve_sislob")
+        function loss_reference(v)
+            omega, theta = exp(v[1]), exp(v[2])
+            mu_LR, sd_LR = v[3], exp(v[4])
+            LR = exp.(view(v, 5:14))
+            loss_sd = exp(v[15])
+            total = logpdf(LogNormal(0, 0.5), omega) + v[1] +
+                logpdf(LogNormal(0, 0.5), theta) + v[2] +
+                logpdf(Normal(0, 0.5), mu_LR) +
+                logpdf(LogNormal(0, 0.5), sd_LR) + v[4] +
+                sum(logpdf(LogNormal(mu_LR, sd_LR), LR[i]) + v[i + 4]
+                    for i in eachindex(LR)) +
+                logpdf(LogNormal(0, 0.7), loss_sd) + v[15]
+            for i in eachindex(loss_data["loss"])
+                cohort = loss_data["cohort_id"][i]
+                t = loss_data["t_value"][loss_data["t_idx"][i]]
+                growth = 1 - exp(-(t / theta)^omega)
+                total += logpdf(Normal(LR[cohort] * loss_data["premium"][cohort] *
+                    growth, loss_sd * loss_data["premium"][cohort]),
+                    loss_data["loss"][i])
+            end
+            return total
+        end
+        @test loss_data["growthmodel_id"] == 1
+        check_classical("loss_curves-losscurve_sislob", 15, loss_reference,
+            [vcat([0.1, -0.2, 0.2, 0.1], -0.2 .+ 0.05 .* sin.(1:10), [0.2])])
+
+        diamonds_data = posteriordb_data("diamonds-diamonds")
+        X = diamonds_data["X"]
+        Xc = X[:, 2:end] .- mean(X[:, 2:end]; dims=1)
+        function diamonds_reference(v)
+            b = view(v, 1:24)
+            intercept, sigma = v[25], exp(v[26])
+            total = sum(logpdf(Normal(), bi) for bi in b) +
+                logpdf(LocationScale(8, 10, TDist(3)), intercept) +
+                logpdf(LocationScale(0, 10, TDist(3)), sigma) + log(2) + v[26]
+            if diamonds_data["prior_only"] == 0
+                total += sum(logpdf(Normal(intercept + sum(Xc[i, j] * b[j]
+                    for j in eachindex(b)), sigma), diamonds_data["Y"][i])
+                    for i in eachindex(diamonds_data["Y"]))
+            end
+            return total
+        end
+        check_classical("diamonds-diamonds", 26, diamonds_reference,
+            [vcat(0.02 .* sin.(1:24), [7.5, log(0.5)])])
+
+        soil_data = posteriordb_data("soil_carbon-soil_incubation")
+        # Integrate the original two-pool equations independently of the
+        # closed-form implementation. RK4 with a 0.05-day step resolves this
+        # public 42-day fixture well below the density tolerance at slow rates.
+        function soil_reference(v; step=0.05)
+            k1, k2, alpha21, alpha12 = exp.(view(v, 1:4))
+            gamma, sigma = inv(1 + exp(-v[5])), exp(v[6])
+            total = soil_data["totalC_t0"]
+            c1, c2 = gamma * total, (1 - gamma) * total
+            previous = soil_data["t0"]
+            function rate(a, b)
+                return (-k1 * a + alpha12 * k2 * b,
+                    alpha21 * k1 * a - k2 * b)
+            end
+            density = sum(logpdf(Normal(), p) + raw for (p, raw) in
+                zip((k1, k2, alpha21, alpha12), view(v, 1:4))) +
+                logpdf(Beta(10, 1), gamma) - log1p(exp(-v[5])) -
+                log1p(exp(v[5])) +
+                logpdf(Cauchy(0, 1), sigma) + v[6] + 5log(2.0)
+            for i in eachindex(soil_data["ts"])
+                current = soil_data["ts"][i]
+                steps = ceil(Int, (current - previous) / step)
+                h = (current - previous) / steps
+                for _ in 1:steps
+                    a1, b1 = rate(c1, c2)
+                    a2, b2 = rate(c1 + h * a1 / 2, c2 + h * b1 / 2)
+                    a3, b3 = rate(c1 + h * a2 / 2, c2 + h * b2 / 2)
+                    a4, b4 = rate(c1 + h * a3, c2 + h * b3)
+                    c1 += h * (a1 + 2a2 + 2a3 + a4) / 6
+                    c2 += h * (b1 + 2b2 + 2b3 + b4) / 6
+                end
+                density += logpdf(Normal(total - c1 - c2, sigma),
+                    soil_data["eCO2mean"][i])
+                previous = current
+            end
+            return density
+        end
+        check_classical("soil_carbon-soil_incubation", 6, soil_reference,
+            [[log(0.2), log(0.02), log(0.3), log(0.1), 1.0, log(0.4)]])
+        # Fast pools that pass all carbon to each other keep the total constant.
+        # Evaluating the decaying and growing exponentials separately gave
+        # 0 * Inf = NaN here.
+        check_classical("soil_carbon-soil_incubation", 6, v -> soil_reference(v; step=0.001),
+            [[log(18.0), log(18.0), 0.0, 0.0, 1.0, log(0.4)]])
     end
 end
 
