@@ -39,6 +39,18 @@ include("models/wells_dae_inter.jl")
 include("models/wells_daae_c.jl")
 include("models/wells_interaction.jl")
 include("models/wells_interaction_c.jl")
+include("models/radon_county_intercept_all.jl")
+include("models/radon_county_intercept_mn.jl")
+include("models/radon_hierarchical_intercept_noncentered_all.jl")
+include("models/radon_hierarchical_intercept_noncentered_mn.jl")
+include("models/radon_partially_pooled_noncentered_all.jl")
+include("models/radon_partially_pooled_noncentered_mn.jl")
+include("models/radon_variable_intercept_noncentered_all.jl")
+include("models/radon_variable_intercept_noncentered_mn.jl")
+include("models/radon_variable_intercept_slope_noncentered_all.jl")
+include("models/radon_variable_intercept_slope_noncentered_mn.jl")
+include("models/radon_variable_slope_noncentered_all.jl")
+include("models/radon_variable_slope_noncentered_mn.jl")
 
 # Maps PosteriorDB posterior names to containers with a `wren_model` property.
 const MODELS = Dict(
@@ -99,6 +111,18 @@ const MODELS = Dict(
     "wells_data-wells_daae_c_model" => WellsDAAEC,
     "wells_data-wells_interaction_c_model" => WellsInteractionC,
     "wells_data-wells_interaction_model" => WellsInteraction,
+    "radon_all-radon_county_intercept" => RadonCountyInterceptAll,
+    "radon_all-radon_hierarchical_intercept_noncentered" => RadonHierarchicalInterceptNoncenteredAll,
+    "radon_all-radon_partially_pooled_noncentered" => RadonPartiallyPooledNoncenteredAll,
+    "radon_all-radon_variable_intercept_noncentered" => RadonVariableInterceptNoncenteredAll,
+    "radon_all-radon_variable_intercept_slope_noncentered" => RadonVariableInterceptSlopeNoncenteredAll,
+    "radon_all-radon_variable_slope_noncentered" => RadonVariableSlopeNoncenteredAll,
+    "radon_mn-radon_county_intercept" => RadonCountyInterceptMn,
+    "radon_mn-radon_hierarchical_intercept_noncentered" => RadonHierarchicalInterceptNoncenteredMn,
+    "radon_mn-radon_partially_pooled_noncentered" => RadonPartiallyPooledNoncenteredMn,
+    "radon_mn-radon_variable_intercept_noncentered" => RadonVariableInterceptNoncenteredMn,
+    "radon_mn-radon_variable_intercept_slope_noncentered" => RadonVariableInterceptSlopeNoncenteredMn,
+    "radon_mn-radon_variable_slope_noncentered" => RadonVariableSlopeNoncenteredMn,
 )
 const MODEL_NAMES = sort!(collect(keys(MODELS)))
 
