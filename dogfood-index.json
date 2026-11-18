@@ -1,0 +1,498 @@
+{
+  "schema": 1,
+  "line": {
+    "repo": "nsiccha/Wren.jl",
+    "ref": "dogfood",
+    "sha": "032082fc2d097db5445c853d7a47efc96de88caa"
+  },
+  "upstream": {
+    "repo": "JuliaBayes/Wren.jl",
+    "ref": "main",
+    "sha": "68932e0089ab07ff47153a591a48a3f3990d63e2"
+  },
+  "prepared_at": "2026-11-18T12:54:47Z",
+  "problems": [
+    {
+      "id": "bernoulli-logit-tails",
+      "role": "fix",
+      "title": "Batched Bernoulli logits can lose a representable tail and its gradient",
+      "summary": "At logit +40 and observation 1, subtracting softplus from the logit cancels the Float64 log mass. The native reverse gradient also loses its tail. A cached gradient must remain correct when later inputs change sign.",
+      "repairs": [],
+      "upstream_refs": [
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/issues/205",
+          "relation": "reports"
+        },
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/206",
+          "relation": "fixes"
+        }
+      ],
+      "fix": {
+        "branch": "dogfood",
+        "commits": [
+          {
+            "sha": "eb0d0fd7dfe4f77bee6582f04cdbfa022a7cc945",
+            "title": "Preserve Bernoulli-logit tails and gradients in native and compiled batches",
+            "original": [
+              "eb0d0fd7dfe4f77bee6582f04cdbfa022a7cc945"
+            ]
+          }
+        ],
+        "why_together": "One cherry-pick on main supplies the signed-softplus kernel, type promotion, support checks and native, cached and compiled regressions from PR #206."
+      },
+      "depends_on": [],
+      "requires": [],
+      "validation": []
+    },
+    {
+      "id": "truncated-flat",
+      "role": "fix",
+      "title": "Bounded parameters need a flat density with the correct transform",
+      "summary": "A Stan parameter with a bound and no prior has constant density on its support. A normalized Uniform adds a parameter-dependent term when a bound depends on another parameter. An unconstrained Flat omits the support and Jacobian.",
+      "repairs": [],
+      "upstream_refs": [
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/issues/192",
+          "relation": "reports"
+        },
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/203",
+          "relation": "fixes"
+        }
+      ],
+      "fix": {
+        "branch": "dogfood",
+        "commits": [
+          {
+            "sha": "4fa4bf157870a8ccc9075d76563a8bbf05c6dadc",
+            "title": "Support truncated flat priors and parameter-dependent density bounds",
+            "original": [
+              "4fa4bf157870a8ccc9075d76563a8bbf05c6dadc"
+            ]
+          }
+        ],
+        "why_together": "One cherry-pick supplies the distribution, Plaice transform, support and Jacobian regressions. The traced density is covered separately from the complete compiled model, whose transform depends on Plaice."
+      },
+      "depends_on": [],
+      "requires": [],
+      "validation": [
+        {
+          "base": "3f27194f0dcdd71dbcd9157fb45b2ba6c07ac68d",
+          "julia": "1.13.1",
+          "tests": [
+            "WrenDists/test/univariate/truncatedflat.jl",
+            "WrenCore/test/issues/192.jl"
+          ],
+          "result": "passed",
+          "detail": "PR #203 reported 29/29 on this component revision. A complete Reactant model with dynamic bounds remains limited by the Plaice transform.",
+          "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/203"
+        }
+      ]
+    },
+    {
+      "id": "benchmark-vector-start",
+      "role": "fix",
+      "title": "Benchmarking can change an explicitly supplied vector",
+      "summary": "Converting a start through model space before building a VecModel can change the vector used for density and gradient timing. The effect is visible with simplex parameters, even when the requested unconstrained coordinates are all zero.",
+      "repairs": [],
+      "upstream_refs": [
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/issues/202",
+          "relation": "related"
+        }
+      ],
+      "fix": {
+        "branch": "dogfood",
+        "commits": [
+          {
+            "sha": "6283303c00ff612fff676823b24c6365fa1809d5",
+            "title": "Benchmark models at their exact vector start",
+            "original": [
+              "6283303c00ff612fff676823b24c6365fa1809d5"
+            ]
+          }
+        ],
+        "why_together": "One cherry-pick preserves the start, supports benchmarking a prepared VecModel, and includes docs and seeded cross-backend regression tests."
+      },
+      "depends_on": [],
+      "requires": [],
+      "validation": [],
+      "draft": {
+        "title": "benchmark_model changes an explicitly supplied unconstrained starting vector",
+        "prepared_at": "2026-11-18T12:54:47Z",
+        "body": "On Wren main at `68932e0089ab07ff47153a591a48a3f3990d63e2`, the model-level benchmark obtains original-space parameters and then vectorises them again. On a simplex, that round trip can change individual coordinates of a start the caller already supplied in unconstrained space.\n\n```julia\nusing WrenCore\nimport WrenDists\n\n@wren function simplex_prior()\n    x ~ WrenDists.Dirichlet(fill(0.1, 1495))\nend\n\nstart = zeros(1494)\nsource = FromValues(VarNamedTuple(x=TransformedValue(start, AsUnconstrainedVec())))\nr = benchmark_model(simplex_prior(); latent_source=source, verbose=false, seconds=0.01)\n@show maximum(abs.(r.vecmodel.sample .- start))\n@assert r.vecmodel.sample == start\n```\n\nExpected: the benchmark evaluates the density and gradient at the exact supplied vector, including when the caller compares AD backends. Taking the vector directly also avoids applying the model-to-vector simplex transform a second time. The separate sparse-prior-draw failure is tracked in #202."
+      }
+    },
+    {
+      "id": "inverse-gamma-prior-example",
+      "role": "shared",
+      "title": "Using an inverse-gamma variance prior from Distributions.jl",
+      "summary": "The tutorial now shows a positive shape-and-scale prior with Distributions.InverseGamma. WrenDists.InverseGamma is also available on current main following PR #234.",
+      "repairs": [],
+      "upstream_refs": [
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/issues/204",
+          "relation": "related"
+        },
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/234",
+          "relation": "related"
+        }
+      ],
+      "fix": {
+        "branch": "dogfood",
+        "commits": [
+          {
+            "sha": "e8700100fa683b306ba4ac791c04e5d44256e591",
+            "title": "Demonstrate inverse-gamma variance priors with Distributions.jl",
+            "original": [
+              "e8700100fa683b306ba4ac791c04e5d44256e591"
+            ]
+          }
+        ],
+        "why_together": "The tutorial example stands alone. The native distribution is already in main."
+      },
+      "depends_on": [],
+      "requires": [],
+      "validation": []
+    },
+    {
+      "id": "marginal-hmm-tie",
+      "role": "fix",
+      "title": "Tied HMM terms can give one state the entire gradient",
+      "summary": "At the zero vector in the input-output HMM, a tie in the forward recursion sent the gradient to one residual scale. The second scale's gradient was about 0.889 instead of 8189.55. A symmetric log-add-exp gives both terms their derivatives.",
+      "repairs": [],
+      "upstream_refs": [
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/198",
+          "relation": "fixes"
+        }
+      ],
+      "fix": {
+        "branch": "dogfood",
+        "commits": [
+          {
+            "sha": "90fc99ca1a8093608ccf0a459068f90aa1f7fc06",
+            "title": "Fix the IOHMM tie gradient and match two discrete models to their Stan sources",
+            "original": [
+              "90fc99ca1a8093608ccf0a459068f90aa1f7fc06"
+            ]
+          }
+        ],
+        "why_together": "The existing #198 review commit contains the model repair and the Stan-based regression. It applies on the discrete model base listed below."
+      },
+      "depends_on": [],
+      "requires": [
+        {
+          "name": "Discrete PosteriorDB model definitions",
+          "repo": "JuliaBayes/Wren.jl",
+          "sha": "00c407bcec91bff333b85f19f9d3aeb829a14254",
+          "why": "The models and their original regression suite were introduced on PR #198. Apply the correction on that model base, or take the complete PR."
+        }
+      ],
+      "validation": [
+        {
+          "base": "08a93051229dd15f4ab185bca76759aa3e962f85",
+          "julia": "1.13.1",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "detail": "PR #198 component suite, 367/367 on the named PR head.",
+          "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/198"
+        }
+      ]
+    },
+    {
+      "id": "hmm-first-emission",
+      "role": "fix",
+      "title": "The Gaussian HMM used a different first-emission likelihood than its Stan source",
+      "summary": "The reference adds the sum of first-emission log densities to every initial state. The Wren port used a single state's emission instead, changing the target and gradients.",
+      "repairs": [],
+      "upstream_refs": [
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/198",
+          "relation": "fixes"
+        }
+      ],
+      "fix": {
+        "branch": "dogfood",
+        "commits": [
+          {
+            "sha": "90fc99ca1a8093608ccf0a459068f90aa1f7fc06",
+            "title": "Fix the IOHMM tie gradient and match two discrete models to their Stan sources",
+            "original": [
+              "90fc99ca1a8093608ccf0a459068f90aa1f7fc06"
+            ]
+          }
+        ],
+        "why_together": "The existing #198 review commit contains the model repair and the Stan-based regression. It applies on the discrete model base listed below."
+      },
+      "depends_on": [],
+      "requires": [
+        {
+          "name": "Discrete PosteriorDB model definitions",
+          "repo": "JuliaBayes/Wren.jl",
+          "sha": "00c407bcec91bff333b85f19f9d3aeb829a14254",
+          "why": "The models and their original regression suite were introduced on PR #198. Apply the correction on that model base, or take the complete PR."
+        }
+      ],
+      "validation": [
+        {
+          "base": "08a93051229dd15f4ab185bca76759aa3e962f85",
+          "julia": "1.13.1",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "detail": "PR #198 component suite, 367/367 on the named PR head.",
+          "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/198"
+        }
+      ]
+    },
+    {
+      "id": "irt-covariates",
+      "role": "fix",
+      "title": "Three latent-regression IRT ports scaled covariates differently from Stan",
+      "summary": "FIMS, TIMSS and science IRT apply the source program's twice-standard-deviation scaling to each covariate. A special case for two-valued rows changed the coefficients' effective scale.",
+      "repairs": [],
+      "upstream_refs": [
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/198",
+          "relation": "fixes"
+        }
+      ],
+      "fix": {
+        "branch": "dogfood",
+        "commits": [
+          {
+            "sha": "90fc99ca1a8093608ccf0a459068f90aa1f7fc06",
+            "title": "Fix the IOHMM tie gradient and match two discrete models to their Stan sources",
+            "original": [
+              "90fc99ca1a8093608ccf0a459068f90aa1f7fc06"
+            ]
+          }
+        ],
+        "why_together": "The existing #198 review commit contains the model repair and the Stan-based regression. It applies on the discrete model base listed below."
+      },
+      "depends_on": [],
+      "requires": [
+        {
+          "name": "Discrete PosteriorDB model definitions",
+          "repo": "JuliaBayes/Wren.jl",
+          "sha": "00c407bcec91bff333b85f19f9d3aeb829a14254",
+          "why": "The models and their original regression suite were introduced on PR #198. Apply the correction on that model base, or take the complete PR."
+        }
+      ],
+      "validation": [
+        {
+          "base": "08a93051229dd15f4ab185bca76759aa3e962f85",
+          "julia": "1.13.1",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "detail": "PR #198 component suite, 367/367 on the named PR head.",
+          "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/198"
+        }
+      ]
+    },
+    {
+      "id": "mixture-tie",
+      "role": "fix",
+      "title": "Equal mixture terms can give incorrect component and weight gradients",
+      "summary": "In normal_2 at the all-zero vector, the native Enzyme gradient was approximately [500, 4197.33, 0]. The symmetric result is approximately [0, 2098.66, 2098.66]. Three mixture ports share the corrected log-add-exp.",
+      "repairs": [],
+      "upstream_refs": [
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/199",
+          "relation": "fixes"
+        }
+      ],
+      "fix": {
+        "branch": "dogfood",
+        "commits": [
+          {
+            "sha": "be933ced4757d47c106777284d9edbeafbde83c3",
+            "title": "Fix the mixture tie gradient and the soil NaN, and use WrenDists.InverseGamma",
+            "original": [
+              "be933ced4757d47c106777284d9edbeafbde83c3"
+            ]
+          }
+        ],
+        "why_together": "The existing #199 review commit contains the model repair and the corresponding numerical regression. It applies on the classical model base listed below."
+      },
+      "depends_on": [],
+      "requires": [
+        {
+          "name": "Classical PosteriorDB model definitions",
+          "repo": "JuliaBayes/Wren.jl",
+          "sha": "2a7f1b141c68c097f9a0ce7c98b8109d39114e12",
+          "why": "The models and their original regression suite were introduced on PR #199. Apply the correction on that model base, or take the complete PR."
+        }
+      ],
+      "validation": [
+        {
+          "base": "be933ced4757d47c106777284d9edbeafbde83c3",
+          "julia": "1.13.1",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "detail": "PR #199 component suite, 278/278 on the named PR head.",
+          "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/199"
+        }
+      ]
+    },
+    {
+      "id": "soil-fast-pools",
+      "role": "fix",
+      "title": "Fast soil-carbon pools can yield NaN for a finite trajectory",
+      "summary": "Multiplying a vanishing exponential by a growing hyperbolic function can produce 0 × Inf. For k1 = k2 = 18 and both transfer fractions 1 the total carbon stays constant. Combining exponents before evaluation keeps the trajectory finite.",
+      "repairs": [],
+      "upstream_refs": [
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/199",
+          "relation": "fixes"
+        }
+      ],
+      "fix": {
+        "branch": "dogfood",
+        "commits": [
+          {
+            "sha": "be933ced4757d47c106777284d9edbeafbde83c3",
+            "title": "Fix the mixture tie gradient and the soil NaN, and use WrenDists.InverseGamma",
+            "original": [
+              "be933ced4757d47c106777284d9edbeafbde83c3"
+            ]
+          }
+        ],
+        "why_together": "The existing #199 review commit contains the model repair and the corresponding numerical regression. It applies on the classical model base listed below."
+      },
+      "depends_on": [],
+      "requires": [
+        {
+          "name": "Classical PosteriorDB model definitions",
+          "repo": "JuliaBayes/Wren.jl",
+          "sha": "2a7f1b141c68c097f9a0ce7c98b8109d39114e12",
+          "why": "The models and their original regression suite were introduced on PR #199. Apply the correction on that model base, or take the complete PR."
+        }
+      ],
+      "validation": [
+        {
+          "base": "be933ced4757d47c106777284d9edbeafbde83c3",
+          "julia": "1.13.1",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "detail": "PR #199 component suite, 278/278 on the named PR head.",
+          "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/199"
+        }
+      ]
+    },
+    {
+      "id": "model-variance-coordinates",
+      "role": "fix",
+      "title": "PosteriorDB variance and length-scale coordinates should match their Stan programs",
+      "summary": "The surgical and motorcycle GP ports sampled inverse scales through Gamma precisions. A direct inverse-gamma site restores the original variance or length scale as the sampled quantity. The classical horseshoe port also uses the native prior.",
+      "repairs": [],
+      "upstream_refs": [
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/199",
+          "relation": "fixes"
+        },
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/234",
+          "relation": "related"
+        }
+      ],
+      "fix": {
+        "branch": "dogfood",
+        "commits": [
+          {
+            "sha": "be933ced4757d47c106777284d9edbeafbde83c3",
+            "title": "Fix the mixture tie gradient and the soil NaN, and use WrenDists.InverseGamma",
+            "original": [
+              "be933ced4757d47c106777284d9edbeafbde83c3"
+            ]
+          }
+        ],
+        "why_together": "The existing #199 review commit contains the model repair and the corresponding numerical regression. It applies on the classical model base listed below."
+      },
+      "depends_on": [],
+      "requires": [
+        {
+          "name": "Classical PosteriorDB model definitions",
+          "repo": "JuliaBayes/Wren.jl",
+          "sha": "2a7f1b141c68c097f9a0ce7c98b8109d39114e12",
+          "why": "The models and their original regression suite were introduced on PR #199. Apply the correction on that model base, or take the complete PR."
+        }
+      ],
+      "validation": [
+        {
+          "base": "be933ced4757d47c106777284d9edbeafbde83c3",
+          "julia": "1.13.1",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "detail": "PR #199 component suite, 278/278 on the named PR head.",
+          "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/199"
+        }
+      ]
+    },
+    {
+      "id": "mnist-variance-initialization",
+      "role": "fix",
+      "title": "MNIST variance priors should yield finite prior starts",
+      "summary": "Two inverse-gamma priors were expressed using flat log-scale sites, reciprocal Gamma densities and manual Jacobians. Sampling the variance sites directly lets the generic prior-draw smoke test cover this model.",
+      "repairs": [],
+      "upstream_refs": [
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/198",
+          "relation": "fixes"
+        },
+        {
+          "url": "https://github.com/JuliaBayes/Wren.jl/pull/234",
+          "relation": "related"
+        }
+      ],
+      "fix": {
+        "branch": "dogfood",
+        "commits": [
+          {
+            "sha": "08a93051229dd15f4ab185bca76759aa3e962f85",
+            "title": "Use WrenDists.InverseGamma for the MNIST network's variance priors",
+            "original": [
+              "08a93051229dd15f4ab185bca76759aa3e962f85"
+            ]
+          }
+        ],
+        "why_together": "The single follow-up changes both MNIST prior sites and removes the special initialization in the regression suite."
+      },
+      "depends_on": [],
+      "requires": [
+        {
+          "name": "MNIST model at the preceding discrete revision",
+          "repo": "JuliaBayes/Wren.jl",
+          "sha": "90fc99ca1a8093608ccf0a459068f90aa1f7fc06",
+          "why": "The follow-up applies on this revision of PR #198."
+        }
+      ],
+      "validation": [
+        {
+          "base": "08a93051229dd15f4ab185bca76759aa3e962f85",
+          "julia": "1.13.1",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "detail": "PR #198 component suite, 367/367 on the named PR head.",
+          "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/198"
+        }
+      ]
+    }
+  ]
+}
