@@ -10,7 +10,7 @@
     "ref": "main",
     "sha": "68932e0089ab07ff47153a591a48a3f3990d63e2"
   },
-  "prepared_at": "2026-11-18T12:54:47Z",
+  "prepared_at": "2026-11-18T13:30:37Z",
   "problems": [
     {
       "id": "bernoulli-logit-tails",
@@ -35,7 +35,11 @@
             "sha": "eb0d0fd7dfe4f77bee6582f04cdbfa022a7cc945",
             "title": "Preserve Bernoulli-logit tails and gradients in native and compiled batches",
             "original": [
-              "eb0d0fd7dfe4f77bee6582f04cdbfa022a7cc945"
+              "e3c841dba8606bf7e2493a8cdfa0e583961ad58a",
+              "42da923e87e8b56ffc5839988214b2b5e2029d9c",
+              "b7dc41d117327d479e641685c1a52845d30cd9a2",
+              "dff7483e7c32ee3644fc18cc7703aa4466f6fbc4",
+              "3618faf42192203774bf491d4ea9b1e9578e0823"
             ]
           }
         ],
@@ -43,7 +47,17 @@
       },
       "depends_on": [],
       "requires": [],
-      "validation": []
+      "validation": [
+        {
+          "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "WrenDists/test/univariate/bernoulli.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "12/12 native tail and reverse-mode assertions, 3/3 cached ReverseDiff assertions across sign changes. No Reactant run on the integrated revision."
+        }
+      ]
     },
     {
       "id": "truncated-flat",
@@ -68,7 +82,9 @@
             "sha": "4fa4bf157870a8ccc9075d76563a8bbf05c6dadc",
             "title": "Support truncated flat priors and parameter-dependent density bounds",
             "original": [
-              "4fa4bf157870a8ccc9075d76563a8bbf05c6dadc"
+              "cd261f71faadf9a73785ee6d6107aa4fbb70e504",
+              "dc8504aba8272eef579d1c2fa2eee8281a7c1dcd",
+              "3f27194f0dcdd71dbcd9157fb45b2ba6c07ac68d"
             ]
           }
         ],
@@ -87,6 +103,16 @@
           "result": "passed",
           "detail": "PR #203 reported 29/29 on this component revision. A complete Reactant model with dynamic bounds remains limited by the Plaice transform.",
           "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/203"
+        },
+        {
+          "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "WrenDists/test/univariate/truncatedflat.jl",
+            "WrenCore/test/issues/192.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "20/20 native distribution assertions and 5/5 positive-scale and parameter-dependent model assertions. Integrated Reactant checks were not run."
         }
       ]
     },
@@ -117,11 +143,21 @@
       },
       "depends_on": [],
       "requires": [],
-      "validation": [],
+      "validation": [
+        {
+          "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "WrenCore/test/ad.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "30/30 in the AD utility suite. For the 1,495-component Dirichlet in the draft, the main-branch start-construction calls gave a maximum absolute discrepancy of 8.881784197001252e-16; the repaired benchmark gave exactly 0.0."
+        }
+      ],
       "draft": {
         "title": "benchmark_model changes an explicitly supplied unconstrained starting vector",
-        "prepared_at": "2026-11-18T12:54:47Z",
-        "body": "On Wren main at `68932e0089ab07ff47153a591a48a3f3990d63e2`, the model-level benchmark obtains original-space parameters and then vectorises them again. On a simplex, that round trip can change individual coordinates of a start the caller already supplied in unconstrained space.\n\n```julia\nusing WrenCore\nimport WrenDists\n\n@wren function simplex_prior()\n    x ~ WrenDists.Dirichlet(fill(0.1, 1495))\nend\n\nstart = zeros(1494)\nsource = FromValues(VarNamedTuple(x=TransformedValue(start, AsUnconstrainedVec())))\nr = benchmark_model(simplex_prior(); latent_source=source, verbose=false, seconds=0.01)\n@show maximum(abs.(r.vecmodel.sample .- start))\n@assert r.vecmodel.sample == start\n```\n\nExpected: the benchmark evaluates the density and gradient at the exact supplied vector, including when the caller compares AD backends. Taking the vector directly also avoids applying the model-to-vector simplex transform a second time. The separate sparse-prior-draw failure is tracked in #202."
+        "prepared_at": "2026-11-18T13:30:37Z",
+        "body": "On Wren main at `68932e0089ab07ff47153a591a48a3f3990d63e2`, the model-level benchmark obtains original-space parameters and then vectorises them again. On a simplex, that round trip can change individual coordinates of a start the caller already supplied in unconstrained space.\n\n```julia\nusing WrenCore\nimport WrenDists\n\n@wren function simplex_prior()\n    x ~ WrenDists.Dirichlet(fill(0.1, 1495))\nend\n\nstart = zeros(1494)\nsource = FromValues(VarNamedTuple(x=TransformedValue(start, AsUnconstrainedVec())))\nr = benchmark_model(simplex_prior(); latent_source=source, verbose=false, seconds=0.01)\n@show maximum(abs.(r.vecmodel.sample .- start))\n@assert r.vecmodel.sample == start\n```\n\nOn Julia 1.13.1 the two start-construction calls from main produced a maximum absolute difference of 8.881784197001252e-16. Preserving the supplied vector gave exactly 0.0.\n\nExpected: the benchmark evaluates the density and gradient at the exact supplied vector, including when the caller compares AD backends. Taking the vector directly also avoids applying the model-to-vector simplex transform a second time. The separate sparse-prior-draw failure is tracked in #202."
       }
     },
     {
@@ -155,7 +191,17 @@
       },
       "depends_on": [],
       "requires": [],
-      "validation": []
+      "validation": [
+        {
+          "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "docs/src/tutorials/distributions.md"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "2/2: the example produces a positive finite variance, and the Distributions.jl and WrenDists shape-and-scale log densities agree at the drawn value."
+        }
+      ]
     },
     {
       "id": "marginal-hmm-tie",
@@ -201,6 +247,15 @@
           "result": "passed",
           "detail": "PR #198 component suite, 367/367 on the named PR head.",
           "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/198"
+        },
+        {
+          "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "1,280/1,280 in the combined five-group model suite. A separate check loaded every name in the exact 142-model union on this revision."
         }
       ]
     },
@@ -248,6 +303,15 @@
           "result": "passed",
           "detail": "PR #198 component suite, 367/367 on the named PR head.",
           "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/198"
+        },
+        {
+          "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "1,280/1,280 in the combined five-group model suite. A separate check loaded every name in the exact 142-model union on this revision."
         }
       ]
     },
@@ -295,6 +359,15 @@
           "result": "passed",
           "detail": "PR #198 component suite, 367/367 on the named PR head.",
           "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/198"
+        },
+        {
+          "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "1,280/1,280 in the combined five-group model suite. A separate check loaded every name in the exact 142-model union on this revision."
         }
       ]
     },
@@ -342,6 +415,15 @@
           "result": "passed",
           "detail": "PR #199 component suite, 278/278 on the named PR head.",
           "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/199"
+        },
+        {
+          "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "1,280/1,280 in the combined five-group model suite. A separate check loaded every name in the exact 142-model union on this revision."
         }
       ]
     },
@@ -389,6 +471,15 @@
           "result": "passed",
           "detail": "PR #199 component suite, 278/278 on the named PR head.",
           "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/199"
+        },
+        {
+          "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "1,280/1,280 in the combined five-group model suite. A separate check loaded every name in the exact 142-model union on this revision."
         }
       ]
     },
@@ -440,6 +531,15 @@
           "result": "passed",
           "detail": "PR #199 component suite, 278/278 on the named PR head.",
           "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/199"
+        },
+        {
+          "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "1,280/1,280 in the combined five-group model suite. A separate check loaded every name in the exact 142-model union on this revision."
         }
       ]
     },
@@ -491,6 +591,15 @@
           "result": "passed",
           "detail": "PR #198 component suite, 367/367 on the named PR head.",
           "evidence": "https://github.com/JuliaBayes/Wren.jl/pull/198"
+        },
+        {
+          "base": "032082fc2d097db5445c853d7a47efc96de88caa",
+          "tests": [
+            "WrenCore/test/posteriordb.jl"
+          ],
+          "result": "passed",
+          "julia": "1.13.1",
+          "detail": "1,280/1,280 in the combined five-group model suite. A separate check loaded every name in the exact 142-model union on this revision."
         }
       ]
     }
