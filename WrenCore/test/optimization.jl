@@ -1,6 +1,6 @@
-module WrenOptimizationTests
+module WrenCoreOptimizationTests
 
-using Wren, Wren.Dists, Optimization, OptimizationOptimJL, Test
+using WrenCore, Distributions, Optimization, OptimizationOptimJL, Test
 import Enzyme
 
 @wren function poisson_rate(count)

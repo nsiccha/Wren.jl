@@ -29,6 +29,7 @@ using Test
     include("ad.jl")
     include("reactant.jl")
     include("posteriordb.jl")
+    include("optimization.jl")
     include("issues/55.jl")
     include("issues/69.jl")
     include("issues/132.jl")

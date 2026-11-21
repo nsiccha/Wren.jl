@@ -8,9 +8,6 @@ include("samplers/prior.jl")
 include("samplers/nuts.jl")
 export prior, nuts
 
-include("optimization.jl")
-export optimize, MAP, MLE
-
 # Distributions
 module Dists
 using Reexport: @reexport
@@ -59,6 +56,10 @@ using WrenCore:
     # Initialisations for MCMC
     FromPrior,
     FromValues,
+    # Optimisation
+    optimize,
+    MAP,
+    MLE,
     # PosteriorDB
     posteriordb_model,
     available_posteriordb_models
@@ -103,6 +104,10 @@ export WrenCore,
     # Initialisations for MCMC
     FromPrior,
     FromValues,
+    # Optimisation
+    optimize,
+    MAP,
+    MLE,
     # PosteriorDB
     posteriordb_model,
     available_posteriordb_models

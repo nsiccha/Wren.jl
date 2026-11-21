@@ -1,12 +1,11 @@
-module WrenOptimizationExt
+module WrenCoreOptimizationExt
 
-using Wren
 using WrenCore
 import DifferentiationInterface as DI
 import Optimization
 using VarNames: densify!!
 
-function Wren.optimize(
+function WrenCore.optimize(
     model::Model,
     solver;
     adtype::DI.AbstractADType=DEFAULT_AD,

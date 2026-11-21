@@ -393,7 +393,7 @@ Conceptually, this means that other factors like the train delay are sufficient 
 
 ## What's 'probabilistic' about it?
 
-Inference, in general, is a very braod term, and can refer to any process of drawing conclusions from data.
+Inference, in general, is a very broad term, and can refer to any process of drawing conclusions from data.
 However, in the context of probabilistic programming, the specific information that we obtain comes in the form of a *distribution*.
 
 That is to say, we don't just get a single value for the parameters: we can't answer the question of 'did I oversleep or not?' with a binary yes/no answer.

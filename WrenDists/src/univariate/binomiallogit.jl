@@ -74,11 +74,13 @@ function DensityInterface.logdensityof(d::BatchedBinomialLogit, x)
     else
         T = float(promote_type(eltype(x), eltype(n), eltype(η)))
         s = zero(T)
+        valid = true
         for i in eachindex(x, n, η)
-            isinteger(x[i]) && 0 <= x[i] <= n[i] || return convert(T, -Inf)
+            # don't return -Inf inside the loop: see #317
+            valid &= isinteger(x[i]) & (0 <= x[i]) & (x[i] <= n[i])
             ni, ki, ηi = convert(T, n[i]), convert(T, x[i]), convert(T, η[i])
             s += binomiallogit_logmass(ni, ki, ηi)
         end
-        s
+        ifelse(valid, s, convert(T, -Inf))
     end
 end

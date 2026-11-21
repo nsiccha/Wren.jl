@@ -1,0 +1,85 @@
+name: Benchmark website
+
+# Builds the benchmark website in `bench/web` and publishes it to the `bench/`
+# folder of the `gh-pages` branch (i.e. https://juliabayes.org/Wren.jl/bench/).
+# The website shows the runs saved on the `benchmark-results` branch. That
+# branch has its own workflow which starts this one whenever it is pushed to.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'bench/web/**'
+      - '.github/workflows/bench-site.yml'
+
+# Only one deploy at a time; if several are queued, only the newest one needs to run.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # 7.0.1
+        with:
+          ref: main
+
+      - name: Get benchmark runs
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # 7.0.1
+        with:
+          ref: benchmark-results
+          path: results
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # 6.1.1
+        with:
+          version: 11.5.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # 7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: bench/web/pnpm-lock.yaml
+
+      - name: Build website
+        working-directory: bench/web
+        run: |
+          # Same as `scripts/fetch-results.sh`, but using the checkout above.
+          rm -rf public/runs
+          mkdir -p public
+          cp -r ../../results/runs public/runs
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Check out gh-pages
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # 7.0.1
+        with:
+          ref: gh-pages
+          path: pages
+
+        # The final push can fail if something else (e.g. a workflow) pushed to
+        # gh-pages in the meantime. In such an instance, this workflow can just
+        # be rerun -- running this multiple times is idempotent.
+      - name: Publish to gh-pages
+        run: |
+          sha=$(git rev-parse --short HEAD)
+          results_sha=$(git -C results rev-parse --short HEAD)
+
+          git -C pages config user.name "github-actions[bot]"
+          git -C pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          rm -rf pages/bench
+          cp -r bench/web/dist pages/bench
+          git -C pages add --all bench
+          if git -C pages diff --cached --quiet; then
+            echo "No changes to publish."
+            exit 0
+          fi
+          git -C pages commit -m "Update benchmark website (main ${sha}, results ${results_sha})"
+
+          git -C pages push origin gh-pages

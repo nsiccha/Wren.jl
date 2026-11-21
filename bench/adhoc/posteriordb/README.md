@@ -7,6 +7,11 @@ julia --project=. posteriordb/run.jl
 
 This folder runs a series of 10 PosteriorDB benchmarks, comparing Wren and Turing.
 
+The Wren models come from WrenCore's PosteriorDB extension (`posteriordb_model`), the
+same as in the main benchmark suite. The Turing models in `models/` are written to match
+them. Both Wren and Turing are timed with the fastest sample, and BLAS is limited to one
+thread.
+
 ## The models
 
 | Posterior                              | dim | Family                               |

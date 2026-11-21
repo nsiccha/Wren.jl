@@ -1,6 +1,7 @@
 # [Point estimates](@id point-estimates)
 
-Load Optimization.jl and a solver package to find a maximum a posteriori (MAP) estimate:
+Load Optimization.jl and a solver package to find a maximum a posteriori (MAP) estimate.
+The functions on this page are defined in WrenCore, so they can also be used with `using WrenCore` alone, without loading Wren's samplers.
 
 ```@example optimization; continued=true
 using Wren

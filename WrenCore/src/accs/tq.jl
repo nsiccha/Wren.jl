@@ -12,6 +12,8 @@ abstract type TrackedQuantitySpec end
     AllQuantities()
 
 Select every tracked quantity.
+
+See also: [`SomeQuantities`](@ref), [`NoQuantities`](@ref)
 """
 struct AllQuantities <: TrackedQuantitySpec end
 
@@ -19,6 +21,8 @@ struct AllQuantities <: TrackedQuantitySpec end
     NoQuantities()
 
 Select no tracked quantities.
+
+See also: [`AllQuantities`](@ref), [`SomeQuantities`](@ref)
 """
 struct NoQuantities <: TrackedQuantitySpec end
 
@@ -27,6 +31,8 @@ struct NoQuantities <: TrackedQuantitySpec end
 
 Select the tracked quantities named in `names`. The name of a submodel, such as `:a` in
 `a ~ sub(...)`, selects every tracked quantity of that submodel.
+
+See also: [`AllQuantities`](@ref), [`NoQuantities`](@ref)
 """
 struct SomeQuantities{names} <: TrackedQuantitySpec
     SomeQuantities(names::Tuple{Vararg{Symbol}}) = new{names}()
@@ -40,6 +46,8 @@ _tq_requested(::SomeQuantities{names}, ::Val{sym}) where {names,sym} = sym in na
     TrackedQuantityAccumulator(spec::TrackedQuantitySpec=AllQuantities())
 
 Record the values of the `@track` statements selected by `spec` in a `VarNamedTuple`.
+
+See also: [`TrackedQuantitySpec`](@ref)
 """
 struct TrackedQuantityAccumulator{S<:TrackedQuantitySpec,V<:VarNamedTuple} <:
        AbstractAccumulator

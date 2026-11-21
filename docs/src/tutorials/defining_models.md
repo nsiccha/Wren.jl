@@ -112,14 +112,14 @@ There are two ways to turn a random quantity into an observation:
 
  1. Marking the tilde with `@observe`:
 
-```@example defining
-@wren function observations(y)
-    x ~ Normal()
-    @observe y ~ Normal(x)
-end
-
-simulate(observations(1.0))
-```
+    ```@example defining
+    @wren function observations(y)
+        x ~ Normal()
+        @observe y ~ Normal(x)
+    end
+    
+    simulate(observations(1.0))
+    ```
 
  2. Conditioning the model on a value.
     First, you need to instantiate the unconditioned model; then, you can condition it using the `|` operator, passing in a `NamedTuple` of observations.
@@ -127,15 +127,15 @@ simulate(observations(1.0))
     Conditioning on `y` actually does two things: firstly, it marks the corresponding random quantity as an observation, and secondly, it sets the value of that random quantity to the value you passed in.
     Notice that `@info y` works here and uses the value of `y` that the model was conditioned on.
 
-```@example defining
-@wren function observations()
-    @info y
-    x ~ Normal()
-    y ~ Normal(x)
-end
-
-conditioned_model = observations() | (; y=1.0)
-```
+    ```@example defining
+    @wren function observations()
+        @info y
+        x ~ Normal()
+        y ~ Normal(x)
+    end
+    
+    conditioned_model = observations() | (; y=1.0)
+    ```
 
 In general, conditioning is more flexible as you can 'recover' the original model by calling `decondition`:
 
@@ -181,7 +181,7 @@ end
 It's worth pointing out here that `@batch` is not 'magical': it works only with a restricted set of syntax and is not guaranteed to be faster than a naive for-loop.
 It is often worth [benchmarking your model](@ref benchmarking) if you want to optimise performance.
 
-### `@track`
+### [`@track`](@id track)
 
 Inside a model body, you may have other quantities of interest that you want to extract, even if they are not parameters.
 You can mark these quantities with the `@track` macro.
@@ -198,6 +198,23 @@ end
 model = with_track() | (; y=1.0)
 simulate(model)
 ```
+
+You can write any expression on the right-hand side of `@track sym = expr`, including `begin` or `let` blocks.
+However, the name of a tracked quantity must be a single symbol, so names like `@track x[1]` or `@track x.a` are not allowed.
+
+!!! note "Tracked quantities are not copied"
+
+    After initialising a tracked quantity `@track my_array`, mutating `my_array` will change its values.
+    To create a snapshot of `my_array` at the time it is initialised, you need to copy explicitly: `@track snapshot = deepcopy(my_array)`.
+
+By default, all tracked quantities are calculated and returned during model evaluation or MCMC sampling.
+You can, however, skip the statements marked with `@track`—for example because they're expensive and not needed at this time—by passing `track=NoQuantities()` to `simulate`, `prior` or `nuts`.
+If you want to keep specific tracked quantities, use `SomeQuantities((:x,))` instead.
+
+!!! note "Side effects may be skipped"
+
+    Quantities marked with `@track` are not evaluated unless they are explicitly requested.
+    This means that if you write, for example, `@track x = push!(my_vec, elem)` and `x` is not requested or otherwise used, the side effect of `push!` will not be executed (i.e. `my_vec` will not be mutated).
 
 ### [`@addloglikelihood`](@id addloglike)
 

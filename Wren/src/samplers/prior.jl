@@ -6,18 +6,19 @@ using MCMCProgress: Determinate, advance!, chain_at, close_phase!, open_phase!
 """
     prior(
         [rng::Random.AbstractRNG=default_rng()],
-        model::WrenCore.Model,
+        model::Model,
         niters::Integer,
         nchains::Integer=1;
         progress::Bool=true,
         track::TrackedQuantitySpec=AllQuantities(),
     ) -> FlexiChains.VNChain
 
-Sample from the prior distribution of a Wren model. The returned chain holds the tracked
-quantities selected by `track`.
+Sample from the prior distribution of a Wren model. Tracked quantities selected by `track`
+will be included in the returned chain.
+See also: [`AllQuantities`](@ref), [`SomeQuantities`](@ref), [`NoQuantities`](@ref)
 """
 function prior(
-    model::WrenCore.Model,
+    model::Model,
     niters::Integer,
     nchains::Integer=1;
     progress::Bool=true,
@@ -27,7 +28,7 @@ function prior(
 end
 function prior(
     rng::Random.AbstractRNG,
-    model::WrenCore.Model,
+    model::Model,
     niters::Integer,
     nchains::Integer=1;
     progress::Bool=true,
@@ -57,7 +58,7 @@ function prior(
 end
 
 function _prior_chain(
-    model::WrenCore.Model,
+    model::Model,
     niters::Integer,
     run,
     j::Integer,

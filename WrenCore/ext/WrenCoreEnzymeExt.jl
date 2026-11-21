@@ -23,9 +23,7 @@ Specifically, this:
 - If Enzyme requires runtime activity, and `WrenCore.AUTO_RUNTIME_ACTIVITY[]` is true, then it
   will enable runtime activity (with a warning).
 """
-function WrenCore._handle_enzyme(
-    vm::WrenCore.VecModel{M,<:DI.AutoEnzyme},
-) where {M<:WrenCore.Model}
+function WrenCore._handle_enzyme(vm::WrenCore.VecModel{M,<:DI.AutoEnzyme}) where {M<:Model}
     err = try
         lp_and_grad(vm, vm.sample)
         # Successful

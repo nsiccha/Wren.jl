@@ -20,7 +20,7 @@ function optimize end
 Find the original-space MAP estimate with [`optimize`](@ref), fixing the objective to
 `logjoint`. Forward all other keywords to `optimize`. Requires Optimization.jl.
 """
-MAP(model::WrenCore.Model, solver; kwargs...) =
+MAP(model::Model, solver; kwargs...) =
     optimize(model, solver; kwargs..., lp_function=logjoint)
 
 """
@@ -30,5 +30,5 @@ Find the MLE with [`optimize`](@ref), fixing the objective to `loglikelihood`.
 The model's priors still define the parameter support. Forward all other keywords
 to `optimize`. Requires Optimization.jl.
 """
-MLE(model::WrenCore.Model, solver; kwargs...) =
+MLE(model::Model, solver; kwargs...) =
     optimize(model, solver; kwargs..., lp_function=loglikelihood)

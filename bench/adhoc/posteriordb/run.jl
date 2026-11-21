@@ -1,10 +1,22 @@
-using Wren: Wren, VecModel, lp, lp_and_grad, benchmark_model
+using Wren: Wren, VecModel, lp, lp_and_grad, benchmark_model, posteriordb_model
+# Loaded so that WrenCore can build the PosteriorDB models.
+using PosteriorDB: PosteriorDB
+using WrenDists: WrenDists
 using DynamicPPL: DynamicPPL
 using ADTypes: AutoEnzyme, AutoMooncake, AutoReactant
 using Enzyme: Reverse, set_runtime_activity
 using Mooncake: Mooncake
 using Reactant: Reactant
 using Printf: @sprintf
+using LogDensityProblems: logdensity, logdensity_and_gradient
+using Random: Xoshiro
+
+# BLAS's own threads make small matrix operations (as in GPRegr) much slower in some Julia
+# sessions but not others, e.g. a gradient that usually takes 5 μs taking 5–460 μs. One
+# BLAS thread makes the results consistent, and the matrices here are too small to benefit
+# from more. (Same as in `bench/suite/run.jl`.)
+using LinearAlgebra: BLAS
+BLAS.set_num_threads(1)
 
 # Each entry is either a time in seconds, or an exception that was caught.
 const BenchEntry = Union{Real,Exception}
@@ -113,9 +125,25 @@ function print_errors(io::IO)
     end
 end
 
-function bench(mod)
+# The same log density and parameters that DynamicPPL's `run_ad` uses: the log joint in
+# unconstrained space, at a point drawn from the prior.
+function _turing_ldf(model, adtype)
+    ldf = DynamicPPL.LogDensityFunction(
+        model,
+        DynamicPPL.getlogjoint_internal,
+        DynamicPPL.LinkAll();
+        adtype=adtype,
+    )
+    params = collect(rand(Xoshiro(468), ldf, DynamicPPL.InitFromPrior()))
+    return ldf, params
+end
+
+# The Wren models come from WrenCore's PosteriorDB extension, so that they are the same as
+# the ones in the main benchmark suite (`bench/suite`). The Turing models in `models/` are
+# written to match them.
+function bench(mod, pdb_name)
     name = string(nameof(mod))
-    wren_model = mod.wren_model
+    wren_model = posteriordb_model(pdb_name)
     turing_model = mod.turing_model
 
     enzyme = AutoEnzyme(; mode=Reverse)
@@ -138,20 +166,25 @@ function bench(mod)
     end
 
     # -- Turing (DynamicPPL) --
-    run_ad = DynamicPPL.TestUtils.AD.run_ad
+    # Timed with `_min_bench`, the same as Wren in `benchmark_model`, so that both report
+    # the fastest sample. (DynamicPPL's `run_ad` reports the median instead.)
     turing_enzyme_adtype = AutoEnzyme(; mode=set_runtime_activity(Reverse))
     turing_enzyme_result = _try() do
-        run_ad(turing_model, turing_enzyme_adtype; test=false, benchmark=true, verbose=false)
+        ldf, params = _turing_ldf(turing_model, turing_enzyme_adtype)
+        primal = Wren.WrenCore._min_bench(() -> logdensity(ldf, params), 1).time
+        grad =
+            Wren.WrenCore._min_bench(() -> logdensity_and_gradient(ldf, params), 1).time
+        (; primal, grad)
     end
     turing_primal =
         turing_enzyme_result isa Exception ? turing_enzyme_result :
-        turing_enzyme_result.primal_time
+        turing_enzyme_result.primal
     turing_enzyme =
         turing_enzyme_result isa Exception ? turing_enzyme_result :
-        turing_enzyme_result.grad_time
+        turing_enzyme_result.grad
     turing_mooncake = _try() do
-        r = run_ad(turing_model, mooncake; test=false, benchmark=true, verbose=false)
-        r.grad_time
+        ldf, params = _turing_ldf(turing_model, mooncake)
+        Wren.WrenCore._min_bench(() -> logdensity_and_gradient(ldf, params), 1).time
     end
 
     # -- Wren + Reactant --
@@ -192,20 +225,23 @@ include("models/mh.jl")
 include("models/rate1.jl")
 include("models/sblri_blr.jl")
 
-results = map((
-    ArK,
-    EightSchoolsCentered,
-    GLMBinomial,
-    GLMPoisson,
-    GLMMPoisson,
-    GPRegr,
-    KidscoreInteraction,
-    Mh,
-    Rate1,
-    SblriBLR,
-)) do mod
+# Maps each module in `models/` to its PosteriorDB posterior name.
+const MODELS = (
+    ArK => "arK-arK",
+    EightSchoolsCentered => "eight_schools-eight_schools_centered",
+    GLMBinomial => "GLM_Binomial_data-GLM_Binomial_model",
+    GLMPoisson => "GLM_Poisson_Data-GLM_Poisson_model",
+    GLMMPoisson => "GLMM_Poisson_data-GLMM_Poisson_model",
+    GPRegr => "gp_pois_regr-gp_regr",
+    KidscoreInteraction => "kidiq-kidscore_interaction",
+    Mh => "Mh_data-Mh_model",
+    Rate1 => "Rate_1_data-Rate_1_model",
+    SblriBLR => "sblri-blr",
+)
+
+results = map(MODELS) do (mod, pdb_name)
     println("Benchmarking ", nameof(mod), "...")
-    bench(mod)
+    bench(mod, pdb_name)
 end
 println()
 print_table(stdout, "Primals (R = Reactant; ratios vs Wren):", results, PRIMAL_COLUMNS)

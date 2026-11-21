@@ -160,7 +160,7 @@ end
 
 """
     test_ad(
-        model::WrenCore.Model,
+        model::Model,
         adtype::DI.AbstractADType;
         reference::AbstractADCorrectnessTestSetting=WithBackend(),
         atol::Real=100 * eps(),
@@ -265,7 +265,7 @@ end
 
 """
     reduce_copies(
-        model::WrenCore.Model,
+        model::Model,
         adtype::DI.AbstractADType;
         n_points::Int=10,
         rng::AbstractRNG=Xoshiro(468),
@@ -417,7 +417,7 @@ end
 
 """
     benchmark_model(
-        model::WrenCore.Model,
+        model::Model,
         adtype::Union{Nothing,DI.AbstractADType}=nothing;
         lp_function=logjoint_transformed,
         latent_source::AbstractLatentSource=FromPrior(Xoshiro(468)),

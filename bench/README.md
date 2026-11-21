@@ -65,15 +65,17 @@ is uploaded as an artifact; tick 'save' to also save it to the
 (pick a 'tip' and a 'base'; cells are coloured by how much faster or slower tip
 is, and hovering shows the base time).
 
-Currently, because the repo is private, there are some limitations. In particular:
+It's hosted at https://juliabayes.org/Wren.jl/bench/. The 'Benchmark website'
+workflow (`.github/workflows/bench-site.yml`) builds it and publishes it to the
+`bench/` folder of the `gh-pages` branch. It runs:
 
-  - It's not hosted online, you have to view it locally.
-  - You have to fetch the JSON benchmark results yourself.
+  - whenever the `benchmark-results` branch is pushed to (that branch has a
+    small workflow of its own, `.github/workflows/trigger-bench-site.yml`, which
+    starts the one on `main`);
+  - whenever `bench/web` changes on `main`;
+  - by hand, from the Actions tab.
 
-When the repo is public, we can host this on GitHub Pages, and make the website
-fetch results over HTTP from GitHub.
-
-Anyway, to view this locally:
+To view it locally:
 
 ```sh
 cd bench/web
