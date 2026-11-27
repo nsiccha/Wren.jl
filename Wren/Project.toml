@@ -1,6 +1,6 @@
 name = "Wren"
 uuid = "bcabdda7-19af-429b-97ac-a6b557ca0f6c"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Penelope Yong <penelopeysm@gmail.com> and contributors"]
 
 [deps]
@@ -11,6 +11,7 @@ DynamicHMC = "bbc10e6e-7c05-544b-b16e-64fede858acb"
 EnzymeCore = "f151be2c-9106-41f4-ab19-57ee4f262869"
 FlexiChains = "4a37a8b9-6e57-4b92-8664-298d46e639f7"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
 MCMCProgress = "06619955-6986-4d5d-aa75-cd81f72cf3a1"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Reexport = "189a3867-3050-52da-a836-e630ba90ab69"
@@ -36,6 +37,7 @@ DynamicHMC = "3"
 EnzymeCore = "0.6 - 0.8"
 FlexiChains = "0.7"
 LinearAlgebra = "1"
+LogDensityProblems = "2"
 MCMCProgress = "0.1"
 Pathfinder = "0.10.3"
 Random = "1"

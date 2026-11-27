@@ -48,8 +48,26 @@ using Enzyme
 adtype = AutoEnzyme(; mode=Reverse)
 
 using Wren
-nuts(model, 1000, 4; adtype=adtype, progress=false)
+chain = nuts(model, 1000, 4; adtype=adtype, progress=false)
 ```
+
+### Gradient evaluations
+
+Almost all of the cost of NUTS lies in evaluating the gradient of the log density, once per leapfrog step.
+Each iteration of the chain stores two counts: `n_steps`, the leapfrog steps (and so gradient evaluations) of that transition, and `n_gradient_evaluations`, the running total of the chain's gradient evaluations up to and including that iteration.
+The running total starts at the chain's first evaluation, so it includes the initial point, the initial step-size search and warm-up, which are not otherwise returned.
+For example, to get the work spent on each chain before and during the retained draws:
+
+```@example mcmc
+n = chain[:n_gradient_evaluations]
+s = chain[:n_steps]
+before = n[1, :] .- s[1, :]  # initialisation and warm-up
+during = sum(s; dims=1)      # retained draws
+(before=collect(before), during=vec(collect(during)), total=collect(n[end, :]))
+```
+
+These counts are exact.
+They do not include the gradient evaluations made once per call while preparing the [`VecModel`](@ref), before any chain starts.
 
 ### Initialisation
 

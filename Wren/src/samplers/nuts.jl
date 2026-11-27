@@ -3,6 +3,7 @@ import DifferentiationInterface as DI
 using EnzymeCore: Reverse
 using FlexiChains: VNChain
 using DynamicHMC: DynamicHMC
+using LogDensityProblems: LogDensityProblems
 using MCMCProgress:
     MCMCProgress, RunProgress, Determinate, advance!, chain_at, close_phase!, open_phase!
 
@@ -43,6 +44,28 @@ end
 close_phases!(::DynamicHMC.NoProgressReport) = nothing
 
 """
+    GradientCounter(ℓ)
+
+Wrap the log density `ℓ` of one chain and count every call of
+`LogDensityProblems.logdensity_and_gradient` on it, which is how DynamicHMC evaluates
+gradients. The count includes the initial point, the initial step-size search and warm-up.
+"""
+mutable struct GradientCounter{L}
+    const ℓ::L
+    n::Int
+end
+GradientCounter(ℓ) = GradientCounter(ℓ, 0)
+
+LogDensityProblems.dimension(c::GradientCounter) = LogDensityProblems.dimension(c.ℓ)
+LogDensityProblems.capabilities(::Type{GradientCounter{L}}) where {L} =
+    LogDensityProblems.capabilities(L)
+LogDensityProblems.logdensity(c::GradientCounter, q) = LogDensityProblems.logdensity(c.ℓ, q)
+function LogDensityProblems.logdensity_and_gradient(c::GradientCounter, q)
+    c.n += 1
+    return LogDensityProblems.logdensity_and_gradient(c.ℓ, q)
+end
+
+"""
     nuts(
         [rng::Random.AbstractRNG=default_rng()],
         model::Model,
@@ -73,6 +96,15 @@ By default, all tracked quantities will be included in the returned chain. To in
 one or a selection of tracked quantities, pass a Symbol or a tuple of Symbols; to include
 none, pass `track=false` or an empty tuple. Note that tracked quantities are not evaluated
 during the log-density step, but only once per iteration.
+
+Each iteration also stores these sampler statistics as extras: `step_size`, `tree_depth`,
+`n_steps`, `is_divergent`, `is_max_depth`, `acceptance_rate`, `log_density` and
+`n_gradient_evaluations`. `n_steps` is the number of leapfrog steps of that transition, each
+of which evaluates the gradient of the log density once. `n_gradient_evaluations` is the
+running total of gradient evaluations of that chain up to and including that iteration,
+counted from the chain's first evaluation, so it includes the initial point, the initial
+step-size search and warm-up. The gradient evaluations made while preparing the
+[`VecModel`](@ref), once per call and before any chain starts, are not included.
 """
 function nuts(
     model::Model,
@@ -190,9 +222,10 @@ function _nuts_chain(
         q = WrenCore.vector_parameters(vm, WrenCore.FromPrior(rng))
     end
     reporter = run === nothing ? DynamicHMC.NoProgressReport() : ChainReporter(run, j)
+    counter = GradientCounter(vm)
     results = DynamicHMC.mcmc_with_warmup(
         rng,
-        vm,
+        counter,
         niters;
         reporter,
         initialization=(; q, ϵ=initial_stepsize),
@@ -200,29 +233,38 @@ function _nuts_chain(
         dynamichmc_kwargs...,
     )
     close_phases!(reporter)
-    return _nuts_results_and_stats(results, vm, track)
+    return _nuts_results_and_stats(results, vm, track, counter.n)
 end
 
-function _nuts_stats(tree_stat, step_size)
+function _nuts_stats(tree_stat, step_size, n_gradient_evaluations)
     t = tree_stat.termination
     return (;
         step_size,
         tree_depth=tree_stat.depth,
+        n_steps=tree_stat.steps,
         is_divergent=DynamicHMC.is_divergent(t),
         is_max_depth=(t == DynamicHMC.REACHED_MAX_DEPTH),
         acceptance_rate=tree_stat.acceptance_rate,
         log_density=tree_stat.π,
+        n_gradient_evaluations,
     )
 end
 function _nuts_results_and_stats(
     results::NamedTuple,
     vecmodel::WrenCore.VecModel,
     track::WrenCore.TrackedQuantitySpec,
+    n_total::Integer,
 )
     ϵ = results.ϵ
     model_results = [
         WrenCore.simulate(vecmodel, col; track) for col in eachcol(results.posterior_matrix)
     ]
-    stats = [_nuts_stats(ts, ϵ) for ts in results.tree_statistics]
+    # Each leapfrog step evaluates the gradient exactly once, so the retained draws used
+    # `sum(steps)` of the `n_total` evaluations, and everything before them used the rest.
+    steps = map(ts -> ts.steps, results.tree_statistics)
+    cumulative = (n_total - sum(steps; init=0)) .+ cumsum(steps)
+    stats = map(results.tree_statistics, cumulative) do ts, n
+        _nuts_stats(ts, ϵ, n)
+    end
     return model_results, stats
 end

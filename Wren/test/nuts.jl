@@ -6,6 +6,7 @@ using FlexiChains
 using Test
 using Random
 import Enzyme
+import ForwardDiff
 
 @wren function f()
     x ~ Normal()
@@ -41,6 +42,24 @@ function WrenCore.get_latent(source::SequenceValues, ::VarName, dist, ::Val)
 end
 WrenCore.scope(source::SequenceValues, ::VarName) = source
 
+# Count gradient evaluations from inside the model: with ForwardDiff, a one-dimensional
+# model's gradient is one evaluation with a dual number, and plain evaluations see a Float64.
+const DUAL_EVALUATIONS = Ref(0)
+count_dual(::Real) = 0.0
+function count_dual(::ForwardDiff.Dual)
+    DUAL_EVALUATIONS[] += 1
+    return 0.0
+end
+
+# A warmup stage that changes nothing and records the count when warmup ends.
+struct RecordDualCount
+    count::Base.RefValue{Int}
+end
+function Wren.DynamicHMC.warmup(_, recorder::RecordDualCount, state)
+    recorder.count[] = DUAL_EVALUATIONS[]
+    return nothing, state
+end
+
 @testset "nuts.jl" begin
     @testset "interface" begin
         chain = nuts(model, 1000, 4; progress=false)
@@ -48,6 +67,50 @@ WrenCore.scope(source::SequenceValues, ::VarName) = source
         @test FlexiChains.niters(chain) == 1000
         @test FlexiChains.nchains(chain) == 4
         @test only(FlexiChains.parameters(chain)) == @vn(x)
+    end
+
+    @testset "gradient counts" begin
+        @wren function counted_normal()
+            x ~ Normal()
+            @addloglikelihood count_dual(x)
+        end
+        adtype = AutoForwardDiff()
+        # Preparing the VecModel may evaluate the gradient; that is not part of any chain.
+        DUAL_EVALUATIONS[] = 0
+        WrenCore.VecModel(counted_normal(), adtype)
+        preparation = DUAL_EVALUATIONS[]
+
+        at_warmup_end = Ref(-1)
+        stages =
+            (Wren.DynamicHMC.default_warmup_stages()..., RecordDualCount(at_warmup_end))
+        DUAL_EVALUATIONS[] = 0
+        chn = nuts(
+            Xoshiro(468),
+            counted_normal(),
+            200;
+            adtype,
+            progress=false,
+            warmup_stages=stages,
+        )
+        n = vec(chn[:n_gradient_evaluations])
+        s = vec(chn[:n_steps])
+        @test eltype(n) <: Integer && eltype(s) <: Integer
+        @test all(>=(1), s)
+        @test diff(n) == s[2:end]
+        # Initial point and step-size search, then at least one step per warmup transition.
+        @test n[1] - s[1] == at_warmup_end[] - preparation
+        @test n[1] - s[1] > sum(stage -> stage.N, stages[2:(end-1)])
+        @test sum(s) == DUAL_EVALUATIONS[] - at_warmup_end[]
+        @test n[end] == DUAL_EVALUATIONS[] - preparation
+
+        # Each chain counts its own evaluations.
+        chn4 = nuts(Xoshiro(468), model, 100, 4; progress=false)
+        n4 = chn4[:n_gradient_evaluations]
+        s4 = chn4[:n_steps]
+        for j in 1:4
+            @test diff(vec(n4[:, j])) == vec(s4[2:end, j])
+            @test n4[1, j] > s4[1, j]
+        end
     end
 
     @testset "initialization" begin
